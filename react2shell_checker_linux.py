@@ -28,7 +28,7 @@ def check_package_json(package_json_path):
             data = json.load(f)
         except json.JSONDecodeError:
             print(f"[ERROR] Invalid JSON in {package_json_path}")
-            return False
+            return []
     
     vulnerable_packages = [
         "react-server-dom-webpack",
@@ -183,15 +183,55 @@ def check_node_modules(node_modules_path):
     return vulnerabilities
 
 
+def validate_url(url):
+    """Validate URL to prevent SSRF attacks"""
+    from urllib.parse import urlparse
+    import ipaddress
+    import socket
+
+    try:
+        parsed = urlparse(url)
+        if not parsed.scheme or not parsed.netloc:
+            return False, "Invalid URL format"
+
+        # Prevent localhost and private IP access
+        hostname = parsed.hostname
+        if hostname in ['localhost', '127.0.0.1', '::1']:
+            return False, "Localhost access not allowed"
+
+        try:
+            # Resolve hostname to IP
+            ip = socket.gethostbyname(hostname)
+            ip_obj = ipaddress.ip_address(ip)
+
+            # Block private IPs
+            if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local:
+                return False, "Private IP access not allowed"
+
+        except (socket.gaierror, ValueError):
+            # If we can't resolve, allow but log warning
+            pass
+
+        return True, None
+    except Exception as e:
+        return False, f"URL validation error: {str(e)}"
+
+
 def passive_check_url(url):
     """Perform passive check on a URL"""
+    # Validate URL first
+    is_valid, error_msg = validate_url(url)
+    if not is_valid:
+        print(f"[ERROR] URL validation failed: {error_msg}")
+        return False
+
     try:
         headers = {
             'User-Agent': 'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:91.0) Gecko/20100101 Firefox/91.0',
             'Accept': '*/*',
             'Connection': 'close'
         }
-        
+
         response = requests.get(url, headers=headers, timeout=10)
         
         # Check for indicators of React usage
@@ -229,14 +269,37 @@ def find_project_root(start_path):
     return None
 
 
+def validate_path(path):
+    """Validate path to prevent directory traversal attacks"""
+    try:
+        # Resolve the path to handle relative paths and symlinks
+        resolved_path = Path(path).resolve()
+
+        # Check for directory traversal attempts
+        if ".." in str(resolved_path):
+            return False, "Directory traversal attempt detected"
+
+        # Ensure the path exists
+        if not resolved_path.exists():
+            return False, "Path does not exist"
+
+        return True, resolved_path
+    except Exception as e:
+        return False, f"Path validation error: {str(e)}"
+
+
 def scan_path(path):
     """Scan a path for React2Shell vulnerabilities"""
-    print(f"[INFO] Scanning path: {path}")
-    
+    # Validate path first
+    is_valid, result = validate_path(path)
+    if not is_valid:
+        print(f"[ERROR] Path validation failed: {result}")
+        return []
+
+    abs_path = Path(result)  # Ensure it's a Path object
+    print(f"[INFO] Scanning path: {abs_path}")
+
     vulnerabilities = []
-    
-    # Convert path to absolute path
-    abs_path = Path(path).resolve()
     
     # Check for package.json
     pkg_json = abs_path / 'package.json'

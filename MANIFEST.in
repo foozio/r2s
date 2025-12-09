@@ -1,0 +1,7 @@
+include README.md
+include API.md
+include TROUBLESHOOTING.md
+include LICENSE
+include requirements*.txt
+include pytest.ini
+recursive-include tests *.py

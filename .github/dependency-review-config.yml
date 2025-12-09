@@ -1,0 +1,19 @@
+# Dependency review configuration
+# https://github.com/actions/dependency-review-action
+
+fail_on_severity: moderate
+allow_licenses:
+  - MIT
+  - BSD-2-Clause
+  - BSD-3-Clause
+  - Apache-2.0
+  - ISC
+  - PSF-2.0
+
+deny_licenses:
+  - MS-PL
+  - GPL-2.0
+  - GPL-3.0
+
+vulnerability_check: true
+license_check: true
