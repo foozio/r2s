@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">
+  <metadata>
+    <id>react2shell-checker</id>
+    <version>2.0.0</version>
+    <packageSourceUrl>https://github.com/your-org/react2shell-checker</packageSourceUrl>
+    <owners>Security Team</owners>
+    <title>React2Shell Vulnerability Checker</title>
+    <authors>Security Team</authors>
+    <projectUrl>https://github.com/your-org/react2shell-checker</projectUrl>
+    <iconUrl>https://raw.githubusercontent.com/your-org/react2shell-checker/main/docs/icon.png</iconUrl>
+    <licenseUrl>https://github.com/your-org/react2shell-checker/blob/main/LICENSE</licenseUrl>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <projectSourceUrl>https://github.com/your-org/react2shell-checker</projectSourceUrl>
+    <docsUrl>https://github.com/your-org/react2shell-checker#readme</docsUrl>
+    <bugTrackerUrl>https://github.com/your-org/react2shell-checker/issues</bugTrackerUrl>
+    <tags>security vulnerability react scanner cve</tags>
+    <summary>Detect React2Shell (CVE-2025-55182) vulnerabilities in React applications</summary>
+    <description>
+React2Shell Vulnerability Checker is a security tool for detecting CVE-2025-55182 vulnerabilities in React-based applications.
+
+## Features
+- Cross-platform vulnerability detection
+- Support for npm, yarn, pnpm, and Bun package managers
+- Local project scanning and remote URL analysis
+- Configurable rules and custom vulnerability definitions
+- JSON output for CI/CD integration
+- Comprehensive logging and progress reporting
+
+## Usage
+After installation, run:
+```
+react2shell-checker --path C:\path\to\react\project
+```
+
+Or check a URL:
+```
+react2shell-checker --url https://your-app.com
+```
+    </description>
+    <releaseNotes>
+### Version 2.0.0
+- Unified cross-platform script
+- Enhanced security validations
+- Comprehensive test suite
+- Docker container support
+- Homebrew and Chocolatey packages
+- YAML configuration system
+- Parallel scanning with progress indicators
+- Scan result caching
+- Memory optimizations for large projects
+    </releaseNotes>
+  </metadata>
+  <files>
+    <file src="tools\**" target="tools" />
+  </files>
+</package>
