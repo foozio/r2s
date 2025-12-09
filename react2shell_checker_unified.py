@@ -18,10 +18,18 @@ import logging
 from pathlib import Path
 import glob
 import platform
-from typing import List, Tuple, Optional, Union
+from typing import List, Tuple, Optional, Union, Dict, Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from packaging import version
 import time
+import hashlib
+import pickle
+
+try:
+    import yaml
+    YAML_AVAILABLE = True
+except ImportError:
+    YAML_AVAILABLE = False
 
 # Import requests for URL checking
 try:
@@ -64,6 +72,148 @@ def setup_logging(verbose: bool = False, log_file: Optional[str] = None) -> logg
 
 # Global logger instance
 logger = setup_logging()
+
+
+def load_config(config_file: Optional[str] = None) -> Dict[str, Any]:
+    """Load configuration from YAML file"""
+    default_config = {
+        'vulnerable_packages': {
+            'react-server-dom-webpack': ['<19.0.1'],
+            'react-server-dom-parcel': ['<19.1.2'],
+            'react-server-dom-turbopack': ['<19.2.1'],
+            'react': ['^19.0.0']
+        },
+        'custom_vulnerable_packages': {},
+        'scan': {
+            'max_workers': 4,
+            'timeout': 300,
+            'file_types': ['package.json', 'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'bun.lockb', 'node_modules'],
+            'exclude_dirs': ['node_modules', '.git', '.svn', '__pycache__', '.pytest_cache']
+        },
+        'logging': {
+            'level': 'INFO',
+            'format': '%(asctime)s - %(name)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s',
+            'file': None
+        },
+        'url_scan': {
+            'timeout': 10,
+            'user_agents': {
+                'windows': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                'linux': 'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:91.0) Gecko/20100101 Firefox/91.0',
+                'macos': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            }
+        },
+        'output': {
+            'format': 'text',
+            'show_recommendations': True,
+            'show_metadata': True
+        }
+    }
+
+    if config_file and YAML_AVAILABLE:
+        try:
+            with open(config_file, 'r', encoding='utf-8') as f:
+                user_config = yaml.safe_load(f) or {}
+            # Merge user config with defaults
+            def merge_dicts(default: Dict[str, Any], user: Dict[str, Any]) -> Dict[str, Any]:
+                result = default.copy()
+                for key, value in user.items():
+                    if isinstance(value, dict) and key in result and isinstance(result[key], dict):
+                        result[key] = merge_dicts(result[key], value)
+                    else:
+                        result[key] = value
+                return result
+            return merge_dicts(default_config, user_config)
+        except Exception as e:
+            logger.warning(f"Could not load config file {config_file}: {e}")
+            logger.info("Using default configuration")
+
+    return default_config
+
+
+# Global configuration
+config = load_config()
+
+
+class ScanCache:
+    """Simple file-based cache for scan results"""
+
+    def __init__(self, cache_dir: Optional[str] = None, max_age: int = 3600):
+        """Initialize cache
+
+        Args:
+            cache_dir: Directory to store cache files (default: ~/.react2shell/cache)
+            max_age: Maximum age of cache entries in seconds (default: 1 hour)
+        """
+        if cache_dir is None:
+            home = os.path.expanduser("~")
+            cache_dir = os.path.join(home, ".react2shell", "cache")
+
+        self.cache_dir = Path(cache_dir)
+        self.max_age = max_age
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+
+    def _get_cache_key(self, path: Union[str, Path], config_hash: str) -> str:
+        """Generate cache key from path and configuration"""
+        path_str = str(Path(path).resolve())
+        key_data = f"{path_str}:{config_hash}"
+        return hashlib.md5(key_data.encode()).hexdigest()
+
+    def _get_cache_file(self, cache_key: str) -> Path:
+        """Get cache file path for key"""
+        return self.cache_dir / f"{cache_key}.cache"
+
+    def _is_cache_valid(self, cache_file: Path) -> bool:
+        """Check if cache file is still valid"""
+        if not cache_file.exists():
+            return False
+
+        # Check file age
+        mtime = cache_file.stat().st_mtime
+        age = time.time() - mtime
+        return age < self.max_age
+
+    def get(self, path: Union[str, Path], config_hash: str) -> Optional[List[Tuple[str, str]]]:
+        """Get cached scan results"""
+        cache_key = self._get_cache_key(path, config_hash)
+        cache_file = self._get_cache_file(cache_key)
+
+        if not self._is_cache_valid(cache_file):
+            return None
+
+        try:
+            with open(cache_file, 'rb') as f:
+                cached_data = pickle.load(f)
+                logger.debug(f"Cache hit for {path}")
+                return cached_data
+        except Exception as e:
+            logger.debug(f"Cache read error for {path}: {e}")
+            return None
+
+    def set(self, path: Union[str, Path], config_hash: str, results: List[Tuple[str, str]]) -> None:
+        """Cache scan results"""
+        cache_key = self._get_cache_key(path, config_hash)
+        cache_file = self._get_cache_file(cache_key)
+
+        try:
+            with open(cache_file, 'wb') as f:
+                pickle.dump(results, f)
+            logger.debug(f"Cached results for {path}")
+        except Exception as e:
+            logger.debug(f"Cache write error for {path}: {e}")
+
+    def clear(self) -> None:
+        """Clear all cache files"""
+        for cache_file in self.cache_dir.glob("*.cache"):
+            try:
+                cache_file.unlink()
+            except Exception:
+                pass
+        logger.info("Cache cleared")
+
+
+# Global cache instance
+scan_cache = ScanCache()
 
 
 def validate_url(url: str) -> Tuple[bool, Optional[str]]:
@@ -152,13 +302,9 @@ def check_package_json(package_json_path: Union[str, Path]) -> List[Tuple[str, s
         logger.error(f"Error reading {package_json_path}: {e}")
         return []
 
-    # Define vulnerable packages and their version ranges
-    vulnerable_packages = {
-        "react-server-dom-webpack": ["<19.0.1"],
-        "react-server-dom-parcel": ["<19.1.2"],
-        "react-server-dom-turbopack": ["<19.2.1"],
-        "react": ["^19.0.0"]  # React 19.x.x is considered vulnerable
-    }
+    # Get vulnerable packages from config
+    vulnerable_packages = config['vulnerable_packages'].copy()
+    vulnerable_packages.update(config['custom_vulnerable_packages'])
 
     detected_vulnerabilities: List[Tuple[str, str]] = []
 
@@ -172,18 +318,13 @@ def check_package_json(package_json_path: Union[str, Path]) -> List[Tuple[str, s
                     # Use enhanced version checking
                     if pkg == "react":
                         if is_react_v19(ver):
+                            logger.info(f"Found React v19: {ver} in {package_json_path}")
                             detected_vulnerabilities.append((pkg, ver))
                     else:
                         # For other packages, check against vulnerable ranges
                         if check_version_vulnerable(pkg, ver, vuln_ranges):
+                            logger.info(f"Found vulnerable package: {pkg}@{ver} in {package_json_path}")
                             detected_vulnerabilities.append((pkg, ver))
-
-    # Check for React v19
-    if 'react' in data.get('dependencies', {}) or 'react' in data.get('devDependencies', {}):
-        react_ver = data.get('dependencies', {}).get('react') or data.get('devDependencies', {}).get('react')
-        if react_ver and is_react_v19(react_ver):
-            logger.info(f"Found React v19: {react_ver} in {package_json_path}")
-            detected_vulnerabilities.append(('react', react_ver))
 
     logger.debug(f"Found {len(detected_vulnerabilities)} vulnerabilities in {package_json_path}")
     return detected_vulnerabilities
@@ -355,12 +496,8 @@ def check_lock_file(file_path: Union[str, Path]) -> List[Tuple[str, str]]:
         # Recursively search for vulnerable packages
         def find_vulnerable_deps(obj: Union[dict, list], path: str = "") -> List[Tuple[str, str]]:
             found: List[Tuple[str, str]] = []
-            vulnerable_packages = {
-                "react-server-dom-webpack": ["<19.0.1"],
-                "react-server-dom-parcel": ["<19.1.2"],
-                "react-server-dom-turbopack": ["<19.2.1"],
-                "react": ["^19.0.0"]
-            }
+            vulnerable_packages = config['vulnerable_packages'].copy()
+            vulnerable_packages.update(config['custom_vulnerable_packages'])
 
             if isinstance(obj, dict):
                 for key, value in obj.items():
@@ -372,9 +509,11 @@ def check_lock_file(file_path: Union[str, Path]) -> List[Tuple[str, str]]:
                         vuln_ranges = vulnerable_packages[key]
                         if key == "react":
                             if is_react_v19(ver):
+                                logger.info(f"Found React v19 in lockfile: {key}@{ver}")
                                 found.append((key, ver))
                         else:
                             if check_version_vulnerable(key, ver, vuln_ranges):
+                                logger.info(f"Found vulnerable package in lockfile: {key}@{ver}")
                                 found.append((key, ver))
 
                     # Recursively search deeper
@@ -393,12 +532,8 @@ def check_lock_file(file_path: Union[str, Path]) -> List[Tuple[str, str]]:
         with open(file_path, 'r', encoding='utf-8') as f:
             content = f.read()
 
-        vulnerable_packages = {
-            "react-server-dom-webpack": ["<19.0.1"],
-            "react-server-dom-parcel": ["<19.1.2"],
-            "react-server-dom-turbopack": ["<19.2.1"],
-            "react": ["^19.0.0"]
-        }
+        vulnerable_packages = config['vulnerable_packages'].copy()
+        vulnerable_packages.update(config['custom_vulnerable_packages'])
 
         for pkg, vuln_ranges in vulnerable_packages.items():
             if pkg in content:
@@ -410,10 +545,57 @@ def check_lock_file(file_path: Union[str, Path]) -> List[Tuple[str, str]]:
                     # Use enhanced version checking
                     if pkg == "react":
                         if is_react_v19(match):
+                            logger.info(f"Found React v19 in lockfile: {pkg}@{match}")
                             vulnerabilities.append((pkg, match))
                     else:
                         if check_version_vulnerable(pkg, match, vuln_ranges):
+                            logger.info(f"Found vulnerable package in lockfile: {pkg}@{match}")
                             vulnerabilities.append((pkg, match))
+
+    elif str(file_path).endswith('.lockb'):  # bun.lockb (binary format)
+        # Bun uses a binary lockfile format, so we need to handle it differently
+        # For now, we'll try to read it as text and search for patterns
+        try:
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                content = f.read()
+
+            vulnerable_packages = {
+                "react-server-dom-webpack": ["<19.0.1"],
+                "react-server-dom-parcel": ["<19.1.2"],
+                "react-server-dom-turbopack": ["<19.2.1"],
+                "react": ["^19.0.0"]
+            }
+
+            for pkg, vuln_ranges in vulnerable_packages.items():
+                if pkg in content:
+                    # Try to find version patterns in the binary-ish content
+                    import re
+                    # Look for version patterns near package names
+                    patterns = [
+                        rf'{pkg}[^a-zA-Z0-9]*([0-9]+\.[0-9]+\.[0-9]+)',  # x.y.z format
+                        rf'{pkg}[^a-zA-Z0-9]*v?([0-9]+\.[0-9]+\.[0-9]+)', # vx.y.z format
+                        rf'{pkg}[^a-zA-Z0-9]*"([^"]+)"',  # quoted versions
+                    ]
+
+                    found_versions = set()
+                    for pattern in patterns:
+                        matches = re.findall(pattern, content)
+                        found_versions.update(matches)
+
+                    for version in found_versions:
+                        # Use enhanced version checking
+                        if pkg == "react":
+                            if is_react_v19(version):
+                                vulnerabilities.append((pkg, version))
+                        else:
+                            if check_version_vulnerable(pkg, version, vuln_ranges):
+                                vulnerabilities.append((pkg, version))
+
+            logger.debug(f"Processed bun.lockb file: {file_path}")
+
+        except Exception as e:
+            logger.warning(f"Could not process bun.lockb file {file_path}: {e}")
+            # Don't add to vulnerabilities, just log the issue
 
     return vulnerabilities
 
@@ -421,12 +603,8 @@ def check_lock_file(file_path: Union[str, Path]) -> List[Tuple[str, str]]:
 def check_node_modules(node_modules_path: Union[str, Path]) -> List[Tuple[str, str]]:
     """Check node_modules for vulnerable packages"""
     vulnerabilities: List[Tuple[str, str]] = []
-    vulnerable_packages = {
-        "react-server-dom-webpack": ["<19.0.1"],
-        "react-server-dom-parcel": ["<19.1.2"],
-        "react-server-dom-turbopack": ["<19.2.1"],
-        "react": ["^19.0.0"]
-    }
+    vulnerable_packages = config['vulnerable_packages'].copy()
+    vulnerable_packages.update(config['custom_vulnerable_packages'])
 
     for pkg, vuln_ranges in vulnerable_packages.items():
         pkg_path = os.path.join(str(node_modules_path), pkg)
@@ -441,9 +619,11 @@ def check_node_modules(node_modules_path: Union[str, Path]) -> List[Tuple[str, s
                         # Use enhanced version checking
                         if pkg == "react":
                             if is_react_v19(ver):
+                                logger.info(f"Found React v19 in node_modules: {pkg}@{ver}")
                                 vulnerabilities.append((pkg, ver))
                         else:
                             if check_version_vulnerable(pkg, ver, vuln_ranges):
+                                logger.info(f"Found vulnerable package in node_modules: {pkg}@{ver}")
                                 vulnerabilities.append((pkg, ver))
                     except json.JSONDecodeError:
                         logger.warning(f"Could not parse package.json for {pkg}")
@@ -580,7 +760,7 @@ def find_project_root(start_path: Union[str, Path]) -> Optional[Path]:
     return None
 
 
-def scan_path(path: Union[str, Path], max_workers: int = 4, show_progress: bool = True) -> List[Tuple[str, str]]:
+def scan_path(path: Union[str, Path], max_workers: Optional[int] = None, show_progress: bool = True, use_cache: bool = True) -> List[Tuple[str, str]]:
     """Scan a path for React2Shell vulnerabilities"""
     start_time = time.time()
     logger.info(f"Starting scan of path: {path}")
@@ -593,6 +773,20 @@ def scan_path(path: Union[str, Path], max_workers: int = 4, show_progress: bool 
 
     abs_path = Path(result)  # Ensure it's a Path object
     logger.info(f"Scanning path: {abs_path}")
+
+    # Use config values if not specified
+    if max_workers is None:
+        max_workers = config['scan']['max_workers']
+
+    # Check cache first
+    config_hash = hashlib.md5(str(config).encode()).hexdigest()
+    if use_cache:
+        cached_results = scan_cache.get(abs_path, config_hash)
+        if cached_results is not None:
+            logger.info(f"Using cached results for {abs_path}")
+            if show_progress:
+                print(f"[INFO] Scan completed in {time.time() - start_time:.2f} seconds (from cache)")
+            return cached_results
 
     vulnerabilities: List[Tuple[str, str]] = []
 
@@ -611,7 +805,8 @@ def scan_path(path: Union[str, Path], max_workers: int = 4, show_progress: bool 
     lock_files = [
         ('package-lock.json', abs_path / 'package-lock.json'),
         ('yarn.lock', abs_path / 'yarn.lock'),
-        ('pnpm-lock.yaml', abs_path / 'pnpm-lock.yaml')
+        ('pnpm-lock.yaml', abs_path / 'pnpm-lock.yaml'),
+        ('bun.lockb', abs_path / 'bun.lockb')
     ]
 
     for file_type, file_path in lock_files:
@@ -630,9 +825,9 @@ def scan_path(path: Union[str, Path], max_workers: int = 4, show_progress: bool 
         files_to_scan.append(('node_modules', str(node_modules)))
 
     # Also search in subdirectories for additional package.json files
-    logger.debug("Searching for additional package.json files...")
+    logger.debug("Searching for additional package.json and lock files...")
     if show_progress:
-        print("[INFO] Searching for additional package.json files...")
+        print("[INFO] Searching for additional package.json and lock files...")
 
     for package_json_path in abs_path.rglob('package.json'):
         if package_json_path != pkg_json:  # Don't double count
@@ -640,6 +835,20 @@ def scan_path(path: Union[str, Path], max_workers: int = 4, show_progress: bool 
             if show_progress:
                 print(f"[INFO] Found additional package.json: {package_json_path}")
             files_to_scan.append(('package_json', str(package_json_path)))
+
+    # Search for additional lock files in subdirectories
+    for lock_file_path in abs_path.rglob('*.lock'):
+        if lock_file_path.name not in ['package-lock.json', 'yarn.lock']:
+            logger.debug(f"Found additional lock file: {lock_file_path}")
+            if show_progress:
+                print(f"[INFO] Found additional lock file: {lock_file_path}")
+            files_to_scan.append(('lock_file', str(lock_file_path)))
+
+    for lockb_file_path in abs_path.rglob('*.lockb'):
+        logger.debug(f"Found bun lock file: {lockb_file_path}")
+        if show_progress:
+            print(f"[INFO] Found bun lock file: {lockb_file_path}")
+        files_to_scan.append(('bun.lockb', str(lockb_file_path)))
 
     total_files = len(files_to_scan)
     logger.info(f"Found {total_files} files to scan")
@@ -652,8 +861,10 @@ def scan_path(path: Union[str, Path], max_workers: int = 4, show_progress: bool 
         try:
             if file_type == 'package_json':
                 return check_package_json(file_path)
-            elif file_type in ['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml']:
+            elif file_type in ['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'lock_file']:
                 return check_lock_file(file_path)
+            elif file_type == 'bun.lockb':
+                return check_lock_file(file_path)  # Reuse the same logic
             elif file_type == 'node_modules':
                 return check_node_modules(file_path)
             return []
@@ -694,6 +905,10 @@ def scan_path(path: Union[str, Path], max_workers: int = 4, show_progress: bool 
     logger.info(f"Scan completed in {elapsed_time:.2f} seconds, found {len(unique_vulnerabilities)} vulnerabilities")
     if show_progress:
         print(f"[INFO] Scan completed in {elapsed_time:.2f} seconds")
+
+    # Cache results
+    if use_cache:
+        scan_cache.set(abs_path, config_hash, unique_vulnerabilities)
 
     return unique_vulnerabilities
     return unique_vulnerabilities
@@ -743,19 +958,35 @@ Examples:
     parser.add_argument('--url', type=str, help='URL to perform passive check on')
     parser.add_argument('--json', action='store_true', help='Output results in JSON format')
     parser.add_argument('--quiet', action='store_true', help='Suppress progress messages')
-    parser.add_argument('--workers', type=int, default=4, help='Number of parallel workers (default: 4)')
+    parser.add_argument('--workers', type=int, help='Number of parallel workers (default: from config)')
     parser.add_argument('--verbose', action='store_true', help='Enable verbose logging')
     parser.add_argument('--log-file', type=str, help='Log to specified file')
+    parser.add_argument('--config', type=str, help='Path to configuration file')
+    parser.add_argument('--no-cache', action='store_true', help='Disable caching of scan results')
+    parser.add_argument('--clear-cache', action='store_true', help='Clear scan cache and exit')
 
     args = parser.parse_args()
+
+    # Handle special commands
+    if args.clear_cache:
+        scan_cache.clear()
+        print("[INFO] Cache cleared")
+        sys.exit(0)
 
     if not args.path and not args.url:
         parser.print_help()
         sys.exit(1)
 
-    # Setup logging based on arguments
+    # Load configuration
+    global config
+    config = load_config(args.config)
+
+    # Setup logging based on arguments and config
+    log_level = 'DEBUG' if args.verbose else config['logging']['level']
+    log_file = args.log_file or config['logging']['file']
+
     global logger
-    logger = setup_logging(verbose=args.verbose, log_file=args.log_file)
+    logger = setup_logging(verbose=(log_level == 'DEBUG'), log_file=log_file)
 
     logger.info("React2Shell Vulnerability Checker started")
     logger.debug(f"Arguments: {vars(args)}")
@@ -765,7 +996,9 @@ Examples:
     if args.path:
         try:
             logger.info(f"Starting path scan: {args.path}")
-            vulnerabilities = scan_path(args.path, max_workers=args.workers, show_progress=show_progress)
+            workers = args.workers if args.workers is not None else None
+            use_cache = not args.no_cache
+            vulnerabilities = scan_path(args.path, max_workers=workers, show_progress=show_progress, use_cache=use_cache)
             print_vulnerabilities(vulnerabilities, args.json)
             logger.info(f"Path scan completed, found {len(vulnerabilities)} vulnerabilities")
         except Exception as e:

@@ -84,13 +84,40 @@ python3 react2shell_checker_unified.py --url https://your-site.example
 ### Opsi Tambahan
 ```bash
 # Menjalankan dengan verbose output
-python3 react2shell_checker_unified.py --path /project --verbose
+python3 react2shell_checker_unified.py --path /project --verbose --log-file scan.log
+
+# Menggunakan file konfigurasi kustom
+python3 react2shell_checker_unified.py --path /project --config custom-config.yaml
 
 # Menjalankan tests
 pytest tests/
 
 # Menjalankan dengan coverage
 pytest --cov=react2shell_checker_unified tests/
+```
+
+### Konfigurasi
+
+Tool ini mendukung file konfigurasi YAML untuk menyesuaikan aturan deteksi kerentanan:
+
+```yaml
+# react2shell.yaml
+vulnerable_packages:
+  react-server-dom-webpack:
+    - "<19.0.1"
+  custom-package:
+    - ">=1.0.0 <1.2.0"
+
+scan:
+  max_workers: 8
+  exclude_dirs:
+    - node_modules
+    - .git
+```
+
+Jalankan dengan konfigurasi kustom:
+```bash
+python3 react2shell_checker_unified.py --path /project --config react2shell.yaml
 ```
 
 ## Contoh Output

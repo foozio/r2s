@@ -1,0 +1,71 @@
+# React2Shell Configuration File
+# This file allows you to customize vulnerability detection rules
+
+# Default vulnerable packages and their version ranges
+vulnerable_packages:
+  react-server-dom-webpack:
+    - "<19.0.1"
+  react-server-dom-parcel:
+    - "<19.1.2"
+  react-server-dom-turbopack:
+    - "<19.2.1"
+  react:
+    - "^19.0.0"
+
+# Custom vulnerability rules (optional)
+# You can add your own packages and version ranges
+custom_vulnerable_packages:
+  # Example: custom-package: ["<1.2.3", ">=1.0.0 <1.2.0"]
+
+# Scan configuration
+scan:
+  # Maximum number of parallel workers
+  max_workers: 4
+
+  # Scan timeout in seconds
+  timeout: 300
+
+  # File types to scan
+  file_types:
+    - package.json
+    - package-lock.json
+    - yarn.lock
+    - pnpm-lock.yaml
+    - bun.lockb
+    - node_modules
+
+  # Directories to exclude from scanning
+  exclude_dirs:
+    - node_modules
+    - .git
+    - .svn
+    - __pycache__
+    - .pytest_cache
+
+# Logging configuration
+logging:
+  level: INFO  # DEBUG, INFO, WARNING, ERROR
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s"
+  file: null  # Set to a file path to enable file logging
+
+# URL scanning configuration
+url_scan:
+  # Timeout for URL requests
+  timeout: 10
+
+  # User agents for different platforms
+  user_agents:
+    windows: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    linux: "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:91.0) Gecko/20100101 Firefox/91.0"
+    macos: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+
+# Output configuration
+output:
+  # Default output format: text, json
+  format: text
+
+  # Include recommendations in output
+  show_recommendations: true
+
+  # Include scan metadata (timing, file count, etc.)
+  show_metadata: true
