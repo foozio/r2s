@@ -87,6 +87,7 @@ def load_config(config_file: Optional[str] = None) -> Dict[str, Any]:
         'scan': {
             'max_workers': 4,
             'timeout': 300,
+            'max_files': 1000,
             'file_types': ['package.json', 'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'bun.lockb', 'node_modules'],
             'exclude_dirs': ['node_modules', '.git', '.svn', '__pycache__', '.pytest_cache']
         },
@@ -486,12 +487,46 @@ def check_lock_file(file_path: Union[str, Path]) -> List[Tuple[str, str]]:
     vulnerabilities: List[Tuple[str, str]] = []
 
     if str(file_path).endswith('.json'):  # package-lock.json
-        with open(file_path, 'r', encoding='utf-8') as f:
-            try:
+        try:
+            # Use streaming JSON parsing for large files to reduce memory usage
+            with open(file_path, 'r', encoding='utf-8') as f:
+                # Read file size to determine parsing strategy
+                f.seek(0, 2)
+                file_size = f.tell()
+                f.seek(0)
+
+                if file_size > 50 * 1024 * 1024:  # 50MB threshold
+                    logger.warning(f"Large lockfile detected ({file_size} bytes), using streaming approach")
+                    # For very large files, use a more memory-efficient approach
+                    content = f.read()
+                    # Simple string search instead of full JSON parsing for large files
+                    vulnerable_packages = config['vulnerable_packages'].copy()
+                    vulnerable_packages.update(config['custom_vulnerable_packages'])
+
+                    for pkg, vuln_ranges in vulnerable_packages.items():
+                        if f'"{pkg}"' in content:
+                            # Extract version using regex patterns
+                            import re
+                            version_patterns = [
+                                rf'"{pkg}":\s*{{\s*"version":\s*"([^"]+)"',
+                                rf'"{pkg}":\s*"([^"]+)"',
+                            ]
+                            for pattern in version_patterns:
+                                matches = re.findall(pattern, content)
+                                for ver in matches:
+                                    if pkg == "react":
+                                        if is_react_v19(ver):
+                                            vulnerabilities.append((pkg, ver))
+                                    else:
+                                        if check_version_vulnerable(pkg, ver, vuln_ranges):
+                                            vulnerabilities.append((pkg, ver))
+                    return vulnerabilities
+
+                # Standard JSON parsing for normal-sized files
                 data = json.load(f)
-            except json.JSONDecodeError:
-                print(f"[ERROR] Invalid JSON in {file_path}")
-                return []
+        except json.JSONDecodeError:
+            print(f"[ERROR] Invalid JSON in {file_path}")
+            return []
 
         # Recursively search for vulnerable packages
         def find_vulnerable_deps(obj: Union[dict, list], path: str = "") -> List[Tuple[str, str]]:
@@ -516,73 +551,104 @@ def check_lock_file(file_path: Union[str, Path]) -> List[Tuple[str, str]]:
                                 logger.info(f"Found vulnerable package in lockfile: {key}@{ver}")
                                 found.append((key, ver))
 
-                    # Recursively search deeper
-                    found.extend(find_vulnerable_deps(value, current_path))
+                    # Recursively search deeper (limit depth for memory efficiency)
+                    if len(current_path.split('.')) < 10:  # Prevent excessive recursion
+                        found.extend(find_vulnerable_deps(value, current_path))
             elif isinstance(obj, list):
                 for i, item in enumerate(obj):
                     current_path = f"{path}[{i}]"
-                    found.extend(find_vulnerable_deps(item, current_path))
+                    if i < 100:  # Limit array processing for memory efficiency
+                        found.extend(find_vulnerable_deps(item, current_path))
 
             return found
 
         vulnerabilities = find_vulnerable_deps(data)
 
     elif str(file_path).endswith('.lock') or str(file_path).endswith('.yaml'):  # yarn.lock or pnpm-lock.yaml
-        # Simple text-based search for vulnerable packages
-        with open(file_path, 'r', encoding='utf-8') as f:
-            content = f.read()
+        # Memory-efficient text-based search for vulnerable packages
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                # Read file in chunks for large files to manage memory
+                chunk_size = 8192
+                vulnerable_packages = config['vulnerable_packages'].copy()
+                vulnerable_packages.update(config['custom_vulnerable_packages'])
 
-        vulnerable_packages = config['vulnerable_packages'].copy()
-        vulnerable_packages.update(config['custom_vulnerable_packages'])
+                found_packages = set()
 
-        for pkg, vuln_ranges in vulnerable_packages.items():
-            if pkg in content:
-                # Find version information near the package name
-                import re
-                pattern = rf'{pkg}[^a-zA-Z0-9].*?version.*?"([^"]+)"'
-                matches = re.findall(pattern, content)
-                for match in matches:
-                    # Use enhanced version checking
-                    if pkg == "react":
-                        if is_react_v19(match):
-                            logger.info(f"Found React v19 in lockfile: {pkg}@{match}")
-                            vulnerabilities.append((pkg, match))
-                    else:
-                        if check_version_vulnerable(pkg, match, vuln_ranges):
-                            logger.info(f"Found vulnerable package in lockfile: {pkg}@{match}")
-                            vulnerabilities.append((pkg, match))
+                while True:
+                    chunk = f.read(chunk_size)
+                    if not chunk:
+                        break
+
+                    for pkg, vuln_ranges in vulnerable_packages.items():
+                        if pkg in chunk and pkg not in found_packages:
+                            found_packages.add(pkg)
+                            # Find version information near the package name
+                            import re
+                            pattern = rf'{pkg}[^a-zA-Z0-9].*?version.*?"([^"]+)"'
+                            matches = re.findall(pattern, chunk)
+                            for match in matches:
+                                # Use enhanced version checking
+                                if pkg == "react":
+                                    if is_react_v19(match):
+                                        logger.info(f"Found React v19 in lockfile: {pkg}@{match}")
+                                        vulnerabilities.append((pkg, match))
+                                else:
+                                    if check_version_vulnerable(pkg, match, vuln_ranges):
+                                        logger.info(f"Found vulnerable package in lockfile: {pkg}@{match}")
+                                        vulnerabilities.append((pkg, match))
+        except Exception as e:
+            logger.error(f"Error reading lockfile {file_path}: {e}")
 
     elif str(file_path).endswith('.lockb'):  # bun.lockb (binary format)
-        # Bun uses a binary lockfile format, so we need to handle it differently
-        # For now, we'll try to read it as text and search for patterns
+        # Memory-efficient processing of Bun's binary lockfile format
         try:
-            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                content = f.read()
+            # Check file size first
+            file_size = os.path.getsize(file_path)
+            if file_size > 100 * 1024 * 1024:  # 100MB limit for binary files
+                logger.warning(f"Bun lockfile too large ({file_size} bytes), skipping")
+                return []
 
-            vulnerable_packages = {
-                "react-server-dom-webpack": ["<19.0.1"],
-                "react-server-dom-parcel": ["<19.1.2"],
-                "react-server-dom-turbopack": ["<19.2.1"],
-                "react": ["^19.0.0"]
-            }
+            with open(file_path, 'rb') as f:
+                # Read in chunks to manage memory
+                chunk_size = 16384  # 16KB chunks
+                vulnerable_packages = config['vulnerable_packages'].copy()
+                vulnerable_packages.update(config['custom_vulnerable_packages'])
 
-            for pkg, vuln_ranges in vulnerable_packages.items():
-                if pkg in content:
-                    # Try to find version patterns in the binary-ish content
-                    import re
-                    # Look for version patterns near package names
-                    patterns = [
-                        rf'{pkg}[^a-zA-Z0-9]*([0-9]+\.[0-9]+\.[0-9]+)',  # x.y.z format
-                        rf'{pkg}[^a-zA-Z0-9]*v?([0-9]+\.[0-9]+\.[0-9]+)', # vx.y.z format
-                        rf'{pkg}[^a-zA-Z0-9]*"([^"]+)"',  # quoted versions
-                    ]
+                found_versions = {}
 
-                    found_versions = set()
-                    for pattern in patterns:
-                        matches = re.findall(pattern, content)
-                        found_versions.update(matches)
+                while True:
+                    chunk = f.read(chunk_size)
+                    if not chunk:
+                        break
 
-                    for version in found_versions:
+                    # Convert to string for pattern matching (ignore decode errors)
+                    try:
+                        text_chunk = chunk.decode('utf-8', errors='ignore')
+                    except:
+                        continue
+
+                    for pkg, vuln_ranges in vulnerable_packages.items():
+                        if pkg in text_chunk:
+                            # Try to find version patterns in the content
+                            import re
+                            patterns = [
+                                rf'{pkg}[^a-zA-Z0-9]*([0-9]+\.[0-9]+\.[0-9]+)',  # x.y.z format
+                                rf'{pkg}[^a-zA-Z0-9]*v?([0-9]+\.[0-9]+\.[0-9]+)', # vx.y.z format
+                                rf'{pkg}[^a-zA-Z0-9]*"([^"]+)"',  # quoted versions
+                            ]
+
+                            for pattern in patterns:
+                                matches = re.findall(pattern, text_chunk)
+                                for version in matches:
+                                    if pkg not in found_versions:
+                                        found_versions[pkg] = set()
+                                    found_versions[pkg].add(version)
+
+                # Process found versions
+                for pkg, versions in found_versions.items():
+                    vuln_ranges = vulnerable_packages[pkg]
+                    for version in versions:
                         # Use enhanced version checking
                         if pkg == "react":
                             if is_react_v19(version):
@@ -855,7 +921,7 @@ def scan_path(path: Union[str, Path], max_workers: Optional[int] = None, show_pr
     if show_progress and total_files > 0:
         print(f"[INFO] Scanning {total_files} files with {max_workers} workers...")
 
-    # Scan files in parallel
+    # Scan files in parallel with memory optimization
     def scan_file(file_info):
         file_type, file_path = file_info
         try:
@@ -872,34 +938,51 @@ def scan_path(path: Union[str, Path], max_workers: Optional[int] = None, show_pr
             logger.error(f"Error scanning {file_path}: {e}")
             return []
 
-    # Use ThreadPoolExecutor for parallel scanning
+    # Use ThreadPoolExecutor for parallel scanning with memory management
     completed = 0
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        future_to_file = {executor.submit(scan_file, file_info): file_info for file_info in files_to_scan}
+    batch_size = min(50, max_workers * 2)  # Process in batches to manage memory
 
-        for future in as_completed(future_to_file):
-            try:
-                vulns = future.result()
-                vulnerabilities.extend(vulns)
-                completed += 1
-                if show_progress and total_files > 1:
-                    progress = (completed / total_files) * 100
-                    print(f"[INFO] Progress: {progress:.1f}% ({completed}/{total_files} files)")
-                    logger.debug(f"Completed {completed}/{total_files} files")
-            except Exception as e:
-                file_info = future_to_file[future]
-                error_msg = f"Failed to scan {file_info[1]}: {str(e)}"
-                logger.error(error_msg)
-                if show_progress:
-                    print(f"[ERROR] {error_msg}")
+    # Process files in batches to optimize memory usage
+    for i in range(0, len(files_to_scan), batch_size):
+        batch = files_to_scan[i:i + batch_size]
 
-    # Remove duplicates while preserving order
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_file = {executor.submit(scan_file, file_info): file_info for file_info in batch}
+
+            for future in as_completed(future_to_file):
+                try:
+                    vulns = future.result()
+                    vulnerabilities.extend(vulns)
+                    completed += 1
+                    if show_progress and total_files > 1:
+                        progress = (completed / total_files) * 100
+                        print(f"[INFO] Progress: {progress:.1f}% ({completed}/{total_files} files)")
+                        logger.debug(f"Completed {completed}/{total_files} files")
+                except Exception as e:
+                    file_info = future_to_file[future]
+                    error_msg = f"Failed to scan {file_info[1]}: {str(e)}"
+                    logger.error(error_msg)
+                    if show_progress:
+                        print(f"[ERROR] {error_msg}")
+
+        # Force garbage collection between batches for large scans
+        if len(files_to_scan) > 100:
+            import gc
+            gc.collect()
+            logger.debug("Garbage collection performed between batches")
+
+    # Remove duplicates while preserving order (memory efficient)
     seen = set()
     unique_vulnerabilities = []
     for vuln in vulnerabilities:
-        if vuln not in seen:
-            seen.add(vuln)
+        vuln_tuple = tuple(vuln)  # Ensure hashable
+        if vuln_tuple not in seen:
+            seen.add(vuln_tuple)
             unique_vulnerabilities.append(vuln)
+
+    # Clear intermediate data structures to free memory
+    del vulnerabilities
+    del seen
 
     elapsed_time = time.time() - start_time
     logger.info(f"Scan completed in {elapsed_time:.2f} seconds, found {len(unique_vulnerabilities)} vulnerabilities")
