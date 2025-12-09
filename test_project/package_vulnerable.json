@@ -1,0 +1,9 @@
+{
+  "name": "test-vulnerable-app",
+  "version": "1.0.0",
+  "dependencies": {
+    "react": "19.1.0",
+    "react-server-dom-webpack": "19.0.0",
+    "lodash": "4.17.21"
+  }
+}
