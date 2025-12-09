@@ -69,3 +69,25 @@ output:
 
   # Include scan metadata (timing, file count, etc.)
   show_metadata: true
+
+# Analytics configuration
+analytics:
+  # Enable anonymous usage analytics to help improve the tool
+  enabled: true
+
+  # Analytics endpoint (for development/testing)
+  endpoint: https://api.react2shell-checker.dev/analytics
+
+# Error reporting configuration
+error_reporting:
+  # Enable error reporting for crash analysis and debugging
+  enabled: false
+
+  # Sentry DSN for error reporting (leave empty to disable)
+  dsn: null
+
+  # Sample rate for performance monitoring (0.0 to 1.0)
+  sample_rate: 0.1
+
+  # Environment (development, staging, production)
+  environment: production

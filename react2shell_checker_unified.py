@@ -24,12 +24,22 @@ from packaging import version
 import time
 import hashlib
 import pickle
+import uuid
+import threading
+import traceback
 
 try:
     import yaml
     YAML_AVAILABLE = True
 except ImportError:
     YAML_AVAILABLE = False
+
+try:
+    import sentry_sdk
+    from sentry_sdk import capture_exception, capture_message
+    SENTRY_AVAILABLE = True
+except ImportError:
+    SENTRY_AVAILABLE = False
 
 # Import requests for URL checking
 try:
@@ -108,6 +118,16 @@ def load_config(config_file: Optional[str] = None) -> Dict[str, Any]:
             'format': 'text',
             'show_recommendations': True,
             'show_metadata': True
+        },
+        'analytics': {
+            'enabled': True,
+            'endpoint': 'https://api.react2shell-checker.dev/analytics'
+        },
+        'error_reporting': {
+            'enabled': False,
+            'dsn': None,
+            'sample_rate': 0.1,
+            'environment': 'production'
         }
     }
 
@@ -215,6 +235,263 @@ class ScanCache:
 
 # Global cache instance
 scan_cache = ScanCache()
+
+
+class UsageAnalytics:
+    """Anonymous usage analytics for improving the tool"""
+
+    def __init__(self, enabled: bool = True, endpoint: str = "https://api.react2shell-checker.dev/analytics"):
+        self.enabled = enabled and config.get('analytics', {}).get('enabled', False)
+        self.endpoint = endpoint
+        self.session_id = str(uuid.uuid4())
+        self.start_time = time.time()
+
+        # Analytics data
+        self.data = {
+            'session_id': self.session_id,
+            'version': '2.0.0',
+            'platform': platform.system(),
+            'python_version': f"{sys.version_info.major}.{sys.version_info.minor}",
+            'start_time': self.start_time,
+            'commands': [],
+            'errors': [],
+            'performance': {}
+        }
+
+    def track_command(self, command: str, args: Dict[str, Any]) -> None:
+        """Track command usage"""
+        if not self.enabled:
+            return
+
+        # Sanitize args to remove sensitive information
+        sanitized_args = {}
+        for key, value in args.items():
+            if 'path' in key.lower() or 'file' in key.lower() or 'config' in key.lower():
+                # Replace actual paths with placeholders
+                if isinstance(value, str) and (os.path.exists(value) if not value.startswith('--') else False):
+                    sanitized_args[key] = f"<{key.replace('_', ' ').title()}>"
+                else:
+                    sanitized_args[key] = value
+            elif key in ['url']:
+                # Anonymize URLs
+                if isinstance(value, str) and value.startswith('http'):
+                    try:
+                        from urllib.parse import urlparse
+                        parsed = urlparse(value)
+                        sanitized_args[key] = f"{parsed.scheme}://{parsed.netloc}<path>"
+                    except:
+                        sanitized_args[key] = "<URL>"
+                else:
+                    sanitized_args[key] = value
+            else:
+                sanitized_args[key] = value
+
+        self.data['commands'].append({
+            'command': command,
+            'args': sanitized_args,
+            'timestamp': time.time()
+        })
+
+    def track_error(self, error_type: str, error_message: str) -> None:
+        """Track errors (anonymized)"""
+        if not self.enabled:
+            return
+
+        # Anonymize error message to remove sensitive paths/data
+        import re
+        anonymized_message = re.sub(r'/[^\s]+', '<path>', error_message)
+        anonymized_message = re.sub(r'C:\\[^\s]+', '<path>', anonymized_message)
+        anonymized_message = re.sub(r'https?://[^\s]+', '<url>', anonymized_message)
+
+        self.data['errors'].append({
+            'type': error_type,
+            'message': anonymized_message,
+            'timestamp': time.time()
+        })
+
+    def track_performance(self, operation: str, duration: float, metadata: Dict[str, Any] = None) -> None:
+        """Track performance metrics"""
+        if not self.enabled:
+            return
+
+        if operation not in self.data['performance']:
+            self.data['performance'][operation] = []
+
+        perf_data = {
+            'duration': duration,
+            'timestamp': time.time()
+        }
+
+        if metadata:
+            # Sanitize metadata
+            sanitized_metadata = {}
+            for key, value in metadata.items():
+                if isinstance(value, (int, float, bool)):
+                    sanitized_metadata[key] = value
+                elif isinstance(value, str) and len(value) < 100:
+                    sanitized_metadata[key] = value
+                else:
+                    sanitized_metadata[key] = f"<{type(value).__name__}>"
+            perf_data['metadata'] = sanitized_metadata
+
+        self.data['performance'][operation].append(perf_data)
+
+    def send_analytics(self) -> None:
+        """Send analytics data asynchronously"""
+        if not self.enabled or not self.data['commands']:
+            return
+
+        def _send():
+            try:
+                self.data['end_time'] = time.time()
+                self.data['duration'] = self.data['end_time'] - self.start_time
+
+                # Remove sensitive data and limit size
+                if len(self.data['errors']) > 10:
+                    self.data['errors'] = self.data['errors'][:10]
+
+                for op in self.data['performance']:
+                    if len(self.data['performance'][op]) > 5:
+                        self.data['performance'][op] = self.data['performance'][op][:5]
+
+                headers = {
+                    'Content-Type': 'application/json',
+                    'User-Agent': f'react2shell-checker/{self.data["version"]}'
+                }
+
+                response = requests.post(
+                    self.endpoint,
+                    json=self.data,
+                    headers=headers,
+                    timeout=5
+                )
+
+                if response.status_code == 200:
+                    logger.debug("Analytics sent successfully")
+                else:
+                    logger.debug(f"Analytics send failed: {response.status_code}")
+
+            except Exception as e:
+                logger.debug(f"Analytics send error: {e}")
+
+        # Send in background thread
+        thread = threading.Thread(target=_send, daemon=True)
+        thread.start()
+
+    def opt_out_message(self) -> str:
+        """Return message about opting out of analytics"""
+        return (
+            "Anonymous usage analytics are enabled by default to help improve the tool.\n"
+            "To opt out, set 'analytics.enabled: false' in your config file or set the environment variable REACT2SHELL_ANALYTICS=false"
+        )
+
+
+# Global analytics instance
+analytics = UsageAnalytics()
+
+
+class ErrorReporting:
+    """Error reporting integration for crash reporting and debugging"""
+
+    def __init__(self, dsn: Optional[str] = None, enabled: bool = False):
+        self.enabled = enabled and SENTRY_AVAILABLE
+        self.dsn = dsn or config.get('error_reporting', {}).get('dsn')
+
+        if self.enabled and self.dsn:
+            sentry_sdk.init(
+                dsn=self.dsn,
+                # Sample rate for performance monitoring
+                traces_sample_rate=config.get('error_reporting', {}).get('sample_rate', 0.1),
+                # Release version
+                release="react2shell-checker@2.0.0",
+                # Environment
+                environment=config.get('error_reporting', {}).get('environment', 'production'),
+                # Disable automatic error capture for unhandled exceptions
+                # We'll capture them manually
+                auto_enabling_integrations=False
+            )
+            logger.debug("Error reporting initialized")
+
+    def capture_error(self, error: Exception, context: Dict[str, Any] = None) -> None:
+        """Capture an exception with context"""
+        if not self.enabled:
+            return
+
+        try:
+            # Add context information
+            with sentry_sdk.configure_scope() as scope:
+                scope.set_tag("component", "react2shell_checker")
+                scope.set_tag("platform", platform.system())
+                scope.set_tag("python_version", f"{sys.version_info.major}.{sys.version_info.minor}")
+
+                if context:
+                    for key, value in context.items():
+                        if isinstance(value, str) and len(value) > 500:
+                            # Truncate long values
+                            scope.set_context(key, {"value": value[:500] + "..."})
+                        else:
+                            scope.set_context(key, {"value": value})
+
+                # Capture the exception
+                capture_exception(error)
+
+            logger.debug("Error captured and reported")
+
+        except Exception as e:
+            logger.debug(f"Failed to report error: {e}")
+
+    def capture_message(self, message: str, level: str = "info", context: Dict[str, Any] = None) -> None:
+        """Capture a custom message"""
+        if not self.enabled:
+            return
+
+        try:
+            with sentry_sdk.configure_scope() as scope:
+                scope.set_tag("component", "react2shell_checker")
+                scope.set_level(level)
+
+                if context:
+                    for key, value in context.items():
+                        scope.set_context(key, {"value": str(value)[:500]})
+
+                capture_message(message, level=level)
+
+            logger.debug(f"Message captured: {message}")
+
+        except Exception as e:
+            logger.debug(f"Failed to report message: {e}")
+
+    def capture_unhandled_error(self) -> None:
+        """Set up handler for unhandled exceptions"""
+        if not self.enabled:
+            return
+
+        def handle_exception(exc_type, exc_value, exc_traceback):
+            if issubclass(exc_type, KeyboardInterrupt):
+                # Don't capture keyboard interrupts
+                sys.__excepthook__(exc_type, exc_value, exc_traceback)
+                return
+
+            logger.error("Unhandled exception occurred", exc_info=(exc_type, exc_value, exc_traceback))
+
+            try:
+                # Capture the unhandled exception
+                with sentry_sdk.configure_scope() as scope:
+                    scope.set_tag("type", "unhandled_exception")
+                    scope.set_tag("component", "react2shell_checker")
+
+                capture_exception(exc_value)
+            except Exception:
+                pass  # Don't let error reporting break the error handler
+
+            # Call the original exception handler
+            sys.__excepthook__(exc_type, exc_value, exc_traceback)
+
+        sys.excepthook = handle_exception
+
+
+# Global error reporting instance
+error_reporting = ErrorReporting()
 
 
 def validate_url(url: str) -> Tuple[bool, Optional[str]]:
@@ -1071,20 +1348,55 @@ Examples:
     global logger
     logger = setup_logging(verbose=(log_level == 'DEBUG'), log_file=log_file)
 
+    # Check for analytics opt-out
+    analytics_opt_out = os.environ.get('REACT2SHELL_ANALYTICS', '').lower() in ('false', '0', 'no')
+    if analytics_opt_out:
+        global analytics
+        analytics.enabled = False
+        logger.debug("Analytics disabled via environment variable")
+
+    # Initialize error reporting
+    global error_reporting
+    error_reporting = ErrorReporting(
+        dsn=config.get('error_reporting', {}).get('dsn'),
+        enabled=config.get('error_reporting', {}).get('enabled', False)
+    )
+
+    # Set up unhandled error reporting
+    error_reporting.capture_unhandled_error()
+
     logger.info("React2Shell Vulnerability Checker started")
     logger.debug(f"Arguments: {vars(args)}")
 
+    # Track command usage
+    analytics.track_command('cli_start', vars(args))
+
     show_progress = not args.quiet
+    use_cache = not getattr(args, 'no_cache', False)
 
     if args.path:
+        scan_start = time.time()
         try:
             logger.info(f"Starting path scan: {args.path}")
             workers = args.workers if args.workers is not None else None
-            use_cache = not args.no_cache
             vulnerabilities = scan_path(args.path, max_workers=workers, show_progress=show_progress, use_cache=use_cache)
+
+            # Track performance
+            scan_duration = time.time() - scan_start
+            analytics.track_performance('path_scan', scan_duration, {
+                'vulnerabilities_found': len(vulnerabilities),
+                'path_length': len(str(args.path))
+            })
+
             print_vulnerabilities(vulnerabilities, args.json)
             logger.info(f"Path scan completed, found {len(vulnerabilities)} vulnerabilities")
         except Exception as e:
+            analytics.track_error('path_scan_error', str(e))
+            error_reporting.capture_error(e, {
+                'operation': 'path_scan',
+                'path': args.path,
+                'args': vars(args)
+            })
             logger.error(f"An error occurred during path scanning: {str(e)}")
             if args.json:
                 import json
@@ -1098,24 +1410,41 @@ Examples:
             sys.exit(1)
 
     if args.url:
+        url_start = time.time()
         try:
             logger.info(f"Starting URL check: {args.url}")
             result = passive_check_url(args.url)
+
+            # Track performance
+            url_duration = time.time() - url_start
+            analytics.track_performance('url_check', url_duration, {
+                'react_found': result,
+                'url_length': len(args.url)
+            })
+
             if args.json:
                 import json
                 url_result = {
                     "url_checked": args.url,
                     "react_indicators_found": result,
-                    "recommendation": "Manual verification recommended" if result else "Appears unaffected"
+                    "recommendation": "Manual verification recommended" if result else "Appears unaffected",
+                    "detection_method": "Enhanced pattern matching" if result else "No indicators found"
                 }
                 print(json.dumps(url_result, indent=2))
             else:
                 if result:
                     print(f"[INFO] URL {args.url} may be vulnerable. Manual verification recommended.")
+                    print(f"[INFO] Detection method: Enhanced React pattern matching")
                 else:
-                    print(f"[INFO] URL {args.url} appears to be unaffected based on initial check.")
+                    print(f"[INFO] URL {args.url} appears unaffected based on enhanced React detection.")
             logger.info(f"URL check completed for {args.url}")
         except Exception as e:
+            analytics.track_error('url_check_error', str(e))
+            error_reporting.capture_error(e, {
+                'operation': 'url_check',
+                'url': args.url,
+                'args': vars(args)
+            })
             logger.error(f"An error occurred during URL scanning: {str(e)}")
             if args.json:
                 import json
@@ -1128,7 +1457,14 @@ Examples:
                 print(f"[ERROR] An error occurred during URL scanning: {str(e)}")
             sys.exit(1)
 
+    # Send analytics before finishing
+    analytics.send_analytics()
+
     logger.info("React2Shell Vulnerability Checker finished")
+
+    # Show opt-out message on first run
+    if analytics.enabled and len(analytics.data['commands']) == 1:
+        print("\n" + analytics.opt_out_message())
 
     if args.path:
         try:
