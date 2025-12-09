@@ -18,7 +18,7 @@ brew install react2shell-checker
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-org/react2shell-checker.git
+git clone https://github.com/foozio/r2s.git
 cd react2shell-checker
 
 # Install using local formula
@@ -43,6 +43,7 @@ react2shell-checker --help
 ## Configuration
 
 The formula installs a default configuration file at:
+
 ```
 /usr/local/etc/react2shell.yaml (Intel Macs)
 /opt/homebrew/etc/react2shell.yaml (Apple Silicon Macs)
@@ -82,6 +83,7 @@ brew audit --formula ./homebrew-tap/react2shell-checker.rb
 ## Dependencies
 
 The formula includes these Python dependencies:
+
 - `requests` - HTTP client for URL checking
 - `packaging` - Version parsing utilities
 - `pyyaml` - YAML configuration support
@@ -97,11 +99,13 @@ The formula includes these Python dependencies:
 ### Installation Issues
 
 **Permission Denied:**
+
 ```bash
 sudo chown -R $(whoami) /usr/local/Homebrew
 ```
 
 **Python Version Conflicts:**
+
 ```bash
 brew install python@3.9
 brew link python@3.9
@@ -110,6 +114,7 @@ brew link python@3.9
 ### Runtime Issues
 
 **Config File Not Found:**
+
 ```bash
 # Check if config exists
 ls -la /usr/local/etc/react2shell.yaml
@@ -119,6 +124,7 @@ react2shell-checker --config ./my-config.yaml
 ```
 
 **Memory Issues:**
+
 ```bash
 # Limit workers for large projects
 react2shell-checker --path /large/project --workers 2

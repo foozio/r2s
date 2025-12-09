@@ -2,8 +2,8 @@ class React2shellChecker < Formula
   include Language::Python::Virtualenv
 
   desc "React2Shell (CVE-2025-55182) Vulnerability Detector"
-  homepage "https://github.com/your-org/react2shell-checker"
-  url "https://github.com/your-org/react2shell-checker/archive/refs/tags/v2.0.0.tar.gz"
+  homepage "https://github.com/foozio/r2s"
+  url "https://github.com/foozio/r2s/archive/refs/tags/v2.0.0.tar.gz"
   sha256 "PLACEHOLDER_SHA256" # Replace with actual SHA256
   license "MIT"
 

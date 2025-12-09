@@ -2,7 +2,7 @@ $ErrorActionPreference = 'Stop'
 
 $packageName = 'react2shell-checker'
 $toolsDir = "$(Split-Path -parent $MyInvocation.MyCommand.Definition)"
-$url = 'https://github.com/your-org/react2shell-checker/releases/download/v2.0.0/react2shell-checker-v2.0.0.zip'
+$url = 'https://github.com/foozio/r2s/releases/download/v2.0.0/react2shell-checker-v2.0.0.zip'
 $checksum = 'PLACEHOLDER_SHA256' # Replace with actual SHA256
 $checksumType = 'sha256'
 

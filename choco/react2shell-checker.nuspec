@@ -3,17 +3,17 @@
   <metadata>
     <id>react2shell-checker</id>
     <version>2.0.0</version>
-    <packageSourceUrl>https://github.com/your-org/react2shell-checker</packageSourceUrl>
+    <packageSourceUrl>https://github.com/foozio/r2s</packageSourceUrl>
     <owners>Security Team</owners>
     <title>React2Shell Vulnerability Checker</title>
     <authors>Security Team</authors>
-    <projectUrl>https://github.com/your-org/react2shell-checker</projectUrl>
-    <iconUrl>https://raw.githubusercontent.com/your-org/react2shell-checker/main/docs/icon.png</iconUrl>
-    <licenseUrl>https://github.com/your-org/react2shell-checker/blob/main/LICENSE</licenseUrl>
+    <projectUrl>https://github.com/foozio/r2s</projectUrl>
+    <iconUrl>https://raw.githubusercontent.com/foozio/r2s/main/docs/icon.png</iconUrl>
+    <licenseUrl>https://github.com/foozio/r2s/blob/main/LICENSE</licenseUrl>
     <requireLicenseAcceptance>false</requireLicenseAcceptance>
-    <projectSourceUrl>https://github.com/your-org/react2shell-checker</projectSourceUrl>
-    <docsUrl>https://github.com/your-org/react2shell-checker#readme</docsUrl>
-    <bugTrackerUrl>https://github.com/your-org/react2shell-checker/issues</bugTrackerUrl>
+    <projectSourceUrl>https://github.com/foozio/r2s</projectSourceUrl>
+    <docsUrl>https://github.com/foozio/r2s#readme</docsUrl>
+    <bugTrackerUrl>https://github.com/foozio/r2s/issues</bugTrackerUrl>
     <tags>security vulnerability react scanner cve</tags>
     <summary>Detect React2Shell (CVE-2025-55182) vulnerabilities in React applications</summary>
     <description>

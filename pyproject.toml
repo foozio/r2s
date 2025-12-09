@@ -38,11 +38,11 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/your-org/react2shell-checker"
-Documentation = "https://github.com/your-org/react2shell-checker#readme"
-Repository = "https://github.com/your-org/react2shell-checker.git"
-Issues = "https://github.com/your-org/react2shell-checker/issues"
-Changelog = "https://github.com/your-org/react2shell-checker/blob/main/README.md"
+Homepage = "https://github.com/foozio/r2s"
+Documentation = "https://github.com/foozio/r2s#readme"
+Repository = "https://github.com/foozio/r2s.git"
+Issues = "https://github.com/foozio/r2s/issues"
+Changelog = "https://github.com/foozio/r2s/blob/main/README.md"
 
 [project.scripts]
 react2shell-checker = "react2shell_checker_unified:main"

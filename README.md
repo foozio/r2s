@@ -5,6 +5,7 @@
 ## Deskripsi
 
 Alat ini mendeteksi potensi kerentanan React2Shell (CVE-2025-55182) dalam proyek React dengan memeriksa:
+
 - File `package.json` dan file lock untuk paket rentan
 - Direktori `node_modules` untuk dependensi yang terpengaruh
 - URL secara pasif untuk deteksi jarak jauh
@@ -14,6 +15,7 @@ Alat ini mendeteksi potensi kerentanan React2Shell (CVE-2025-55182) dalam proyek
 ## Paket yang Diperiksa
 
 Alat ini akan memeriksa keberadaan paket-paket berikut:
+
 - `react-server-dom-webpack`
 - `react-server-dom-parcel`
 - `react-server-dom-turbopack`
@@ -22,19 +24,22 @@ Alat ini akan memeriksa keberadaan paket-paket berikut:
 ## Versi Tertambal
 
 Jika ditemukan kerentanan, pastikan untuk mengupgrade ke versi tertambal berikut:
+
 - `react-server-dom-webpack`, `react-server-dom-parcel`, `react-server-dom-turbopack`: versi 19.0.1, 19.1.2, atau 19.2.1
 
 ## Instalasi
 
 ### Persyaratan Sistem
+
 - Python 3.6 atau lebih tinggi
 - pip (Python package installer)
 - Git (untuk cloning repository)
 
 ### Instalasi Cepat (Cross-Platform)
+
 ```bash
 # Clone repository
-git clone https://github.com/your-org/react2shell-checker.git
+git clone https://github.com/foozio/r2s.git
 cd react2shell-checker
 
 # Buat virtual environment (direkomendasikan)
@@ -51,6 +56,7 @@ pip install -r requirements-dev.txt
 ```
 
 ### Instalasi Platform-Specific
+
 ```bash
 # Ubuntu Linux
 chmod +x install_linux.sh
@@ -66,6 +72,7 @@ python3 install_cross_platform.py
 ## Penggunaan
 
 ### Pemeriksaan Lokal
+
 ```bash
 # Menggunakan script unified (cross-platform)
 python3 react2shell_checker_unified.py --path /path/to/your/project
@@ -76,12 +83,14 @@ python react2shell_checker_windows.py --path C:\path\to\your\project  # Windows
 ```
 
 ### Pemeriksaan URL
+
 ```bash
 # Pemeriksaan pasif dengan validasi keamanan
 python3 react2shell_checker_unified.py --url https://your-site.example
 ```
 
 ### Opsi Tambahan
+
 ```bash
 # Menjalankan dengan verbose output
 python3 react2shell_checker_unified.py --path /project --verbose --log-file scan.log
@@ -116,6 +125,7 @@ scan:
 ```
 
 Jalankan dengan konfigurasi kustom:
+
 ```bash
 python3 react2shell_checker_unified.py --path /project --config react2shell.yaml
 ```
@@ -123,6 +133,7 @@ python3 react2shell_checker_unified.py --path /project --config react2shell.yaml
 ## Contoh Output
 
 ### Jika Aman
+
 ```
 [INFO] Scanning path: /path/to/your/project
 [INFO] Found package.json: /path/to/your/project/package.json
@@ -130,6 +141,7 @@ python3 react2shell_checker_unified.py --path /project --config react2shell.yaml
 ```
 
 ### Jika Ditemukan Kerentanan
+
 ```
 [INFO] Scanning path: /path/to/your/project
 [INFO] Found package.json: /path/to/your/project/package.json
@@ -188,6 +200,7 @@ pytest tests/test_performance.py -m slow
 ## Development
 
 ### Struktur Kode
+
 ```
 react2shell-checker/
 ├── react2shell_checker_unified.py    # Main cross-platform script
@@ -204,6 +217,7 @@ react2shell-checker/
 ```
 
 ### Contributing
+
 1. Fork repository
 2. Buat feature branch (`git checkout -b feature/amazing-feature`)
 3. Commit changes (`git commit -m 'Add amazing feature'`)
@@ -211,6 +225,7 @@ react2shell-checker/
 5. Buat Pull Request
 
 ### Code Quality
+
 - Jalankan tests sebelum commit: `pytest`
 - Format code dengan Black: `black .`
 - Lint dengan Flake8: `flake8`
@@ -219,6 +234,7 @@ react2shell-checker/
 ## Changelog
 
 ### v2.0.0 (Latest)
+
 - ✅ Unified cross-platform script
 - ✅ Enhanced security validations
 - ✅ Comprehensive test suite
@@ -226,6 +242,7 @@ react2shell-checker/
 - ✅ Performance optimizations
 
 ### v1.0.0
+
 - ✅ Basic vulnerability detection
 - ✅ Platform-specific scripts
 - ✅ URL passive checking
@@ -237,6 +254,6 @@ Alat ini disediakan sebagai alat deteksi keamanan untuk membantu pengembang meng
 
 ## Support
 
-- **Issues**: [GitHub Issues](https://github.com/your-org/react2shell-checker/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/your-org/react2shell-checker/discussions)
+- **Issues**: [GitHub Issues](https://github.com/foozio/r2s/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/foozio/r2s/discussions)
 - **Security**: Untuk laporan keamanan, email ke security@your-org.com

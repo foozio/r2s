@@ -13,12 +13,14 @@ The React2Shell Vulnerability Checker can be run using Docker for easy deploymen
 ## Quick Start
 
 ### 1. Clone the Repository
+
 ```bash
-git clone https://github.com/your-org/react2shell-checker.git
+git clone https://github.com/foozio/r2s.git
 cd react2shell-checker
 ```
 
 ### 2. Build the Docker Image
+
 ```bash
 # Using the provided script
 ./docker-run.sh build
@@ -28,6 +30,7 @@ docker build -t react2shell-scanner:latest .
 ```
 
 ### 3. Test the Image
+
 ```bash
 ./docker-run.sh test
 ```
@@ -81,7 +84,9 @@ docker-compose --profile ci run --rm ci-scan
 ## Output
 
 ### Scan Results
+
 Results are saved to the `./scans/` directory in JSON format:
+
 ```json
 {
   "vulnerabilities_found": true,
@@ -99,15 +104,18 @@ Results are saved to the `./scans/` directory in JSON format:
 ```
 
 ### Logs
+
 Detailed logs are saved to the `./logs/` directory with timestamps and debug information.
 
 ## Configuration
 
 ### Environment Variables
+
 - `PYTHONUNBUFFERED=1`: Ensures unbuffered output for real-time logging
 - `CI=true`: Enables CI mode (can be used for different behaviors)
 
 ### Volumes
+
 - `/app/scans`: Output directory for scan results
 - `/app/logs`: Output directory for log files
 - `/app/target-project`: Input directory for project scanning (read-only)
@@ -115,12 +123,14 @@ Detailed logs are saved to the `./logs/` directory with timestamps and debug inf
 ## Security Considerations
 
 ### Container Security
+
 - Runs as non-root user (`scanner`)
 - Uses slim Python base image for minimal attack surface
 - Read-only volumes where possible
 - No privileged access
 
 ### Network Security
+
 - URL validation prevents SSRF attacks
 - No outbound connections except for specified URL scanning
 - Timeout limits prevent hanging requests
@@ -128,6 +138,7 @@ Detailed logs are saved to the `./logs/` directory with timestamps and debug inf
 ## CI/CD Integration
 
 ### GitHub Actions Example
+
 ```yaml
 - name: Scan for React2Shell vulnerabilities
   run: |
@@ -141,6 +152,7 @@ Detailed logs are saved to the `./logs/` directory with timestamps and debug inf
 ```
 
 ### Jenkins Pipeline Example
+
 ```groovy
 stage('Security Scan') {
     steps {
@@ -161,28 +173,37 @@ stage('Security Scan') {
 ### Common Issues
 
 #### Permission Denied
+
 ```
 docker: Got permission denied while trying to connect to the Docker daemon socket
 ```
+
 **Solution:** Add your user to the docker group or run with sudo.
 
 #### No Space Left on Device
+
 ```
 ERROR: No space left on device
 ```
+
 **Solution:** Clean up Docker images and containers:
+
 ```bash
 docker system prune -a
 ```
 
 #### Mount Issues on Windows
+
 ```
 ERROR: Invalid mount path
 ```
+
 **Solution:** Use proper Windows path format or Docker Desktop settings.
 
 #### Scan Results Empty
+
 **Check:**
+
 - Ensure the path/URL is accessible
 - Verify the project contains package.json or React files
 - Check logs for detailed error messages
@@ -190,6 +211,7 @@ ERROR: Invalid mount path
 ### Debug Mode
 
 Enable verbose logging for troubleshooting:
+
 ```bash
 docker run --rm \
   -v $(pwd)/logs:/app/logs \
@@ -202,11 +224,13 @@ docker run --rm \
 ## Performance
 
 ### Resource Usage
+
 - **Base Image Size:** ~150MB (Python 3.9 slim)
 - **Memory Usage:** 50-200MB depending on scan size
 - **CPU Usage:** Minimal for small projects, scales with parallel workers
 
 ### Optimization Tips
+
 - Use `--quiet` flag to reduce output overhead
 - Limit `--workers` based on available CPU cores
 - Mount only necessary directories as read-only
@@ -214,6 +238,7 @@ docker run --rm \
 ## Building Custom Images
 
 ### Multi-stage Build
+
 ```dockerfile
 # Build stage
 FROM python:3.9-slim as builder
@@ -226,6 +251,7 @@ COPY --from=builder /app/dependencies /app/
 ```
 
 ### Custom Configuration
+
 ```dockerfile
 FROM react2shell-scanner:latest
 # Add custom security policies, additional tools, etc.

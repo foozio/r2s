@@ -18,7 +18,7 @@ choco upgrade react2shell-checker
 
 ```powershell
 # Clone the repository
-git clone https://github.com/your-org/react2shell-checker.git
+git clone https://github.com/foozio/r2s.git
 cd react2shell-checker
 
 # Pack the chocolatey package
@@ -33,11 +33,13 @@ choco install react2shell-checker --source .
 After installation, the tool is available via:
 
 **Batch file (simplest):**
+
 ```cmd
 react2shell-checker --path C:\path\to\react\project
 ```
 
 **PowerShell script (advanced):**
+
 ```powershell
 # Using parameters
 react2shell-checker -Path "C:\path\to\project" -Json -Verbose
@@ -49,6 +51,7 @@ react2shell-checker -Url "https://your-app.com"
 ## Package Contents
 
 The Chocolatey package includes:
+
 - `react2shell_checker_unified.py` - Main Python script
 - `react2shell.yaml` - Default configuration file
 - `react2shell-checker.bat` - Windows batch file wrapper
@@ -100,6 +103,7 @@ react2shell-checker --help
 ## Dependencies
 
 The package automatically installs:
+
 - Python 3.9+ (if not present)
 - `requests` - HTTP client library
 - `packaging` - Version parsing utilities
@@ -117,12 +121,14 @@ The package automatically installs:
 ### Installation Issues
 
 **Chocolatey not found:**
+
 ```powershell
 # Install Chocolatey first
 Set-ExecutionPolicy Bypass -Scope Process -Force; [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; iex ((New-Object System.Net.WebClient).DownloadString('https://chocolatey.org/install.ps1'))
 ```
 
 **Python installation fails:**
+
 ```powershell
 # Install Python manually
 choco install python --version 3.9.13
@@ -132,6 +138,7 @@ refreshenv
 ### Runtime Issues
 
 **Command not found:**
+
 ```powershell
 # Refresh environment
 refreshenv
@@ -140,6 +147,7 @@ refreshenv
 ```
 
 **Permission denied:**
+
 ```powershell
 # Run as Administrator
 # Or check execution policy
@@ -148,6 +156,7 @@ Set-ExecutionPolicy RemoteSigned -Scope CurrentUser
 ```
 
 **Memory issues:**
+
 ```cmd
 # Limit workers for large projects
 react2shell-checker --path C:\large\project --workers 2

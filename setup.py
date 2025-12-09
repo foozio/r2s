@@ -19,7 +19,7 @@ setup(
     description="React2Shell (CVE-2025-55182) Vulnerability Detector",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/your-org/react2shell-checker",
+    url="https://github.com/foozio/r2s",
     packages=find_packages(),
     classifiers=[
         "Development Status :: 5 - Production/Stable",
@@ -64,8 +64,8 @@ setup(
         "": ["*.md", "*.txt"],
     },
     project_urls={
-        "Bug Reports": "https://github.com/your-org/react2shell-checker/issues",
-        "Source": "https://github.com/your-org/react2shell-checker",
-        "Documentation": "https://github.com/your-org/react2shell-checker#readme",
+        "Bug Reports": "https://github.com/foozio/r2s/issues",
+        "Source": "https://github.com/foozio/r2s",
+        "Documentation": "https://github.com/foozio/r2s#readme",
     },
 )
