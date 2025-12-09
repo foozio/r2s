@@ -14,6 +14,7 @@ import json
 import os
 import sys
 import argparse
+import logging
 from pathlib import Path
 import glob
 import platform
@@ -30,23 +31,63 @@ except ImportError:
     sys.exit(1)
 
 
+# Configure logging
+def setup_logging(verbose: bool = False, log_file: Optional[str] = None) -> logging.Logger:
+    """Set up structured logging for the application"""
+    logger = logging.getLogger('react2shell')
+    logger.setLevel(logging.DEBUG if verbose else logging.INFO)
+
+    # Remove any existing handlers
+    for handler in logger.handlers[:]:
+        logger.removeHandler(handler)
+
+    # Create formatter
+    formatter = logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s'
+    )
+
+    # Console handler
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(logging.DEBUG if verbose else logging.INFO)
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+
+    # File handler (if specified)
+    if log_file:
+        file_handler = logging.FileHandler(log_file)
+        file_handler.setLevel(logging.DEBUG)
+        file_handler.setFormatter(formatter)
+        logger.addHandler(file_handler)
+
+    return logger
+
+
+# Global logger instance
+logger = setup_logging()
+
+
 def validate_url(url: str) -> Tuple[bool, Optional[str]]:
     """Validate URL to prevent SSRF attacks"""
     from urllib.parse import urlparse
     import ipaddress
     import socket
 
+    logger.debug(f"Validating URL: {url}")
+
     try:
         parsed = urlparse(url)
         if not parsed.scheme or not parsed.netloc:
+            logger.warning(f"Invalid URL format: {url}")
             return False, "Invalid URL format"
 
         # Prevent localhost and private IP access
         hostname = parsed.hostname
         if not hostname:
+            logger.warning(f"Invalid hostname in URL: {url}")
             return False, "Invalid hostname"
 
         if hostname in ['localhost', '127.0.0.1', '::1']:
+            logger.warning(f"Blocked localhost access attempt: {url}")
             return False, "Localhost access not allowed"
 
         try:
@@ -56,50 +97,68 @@ def validate_url(url: str) -> Tuple[bool, Optional[str]]:
 
             # Block private IPs
             if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local:
+                logger.warning(f"Blocked private IP access: {hostname} ({ip})")
                 return False, "Private IP access not allowed"
 
-        except (socket.gaierror, ValueError):
+            logger.debug(f"URL validation passed for {hostname} ({ip})")
+
+        except (socket.gaierror, ValueError) as e:
             # If we can't resolve, allow but log warning
+            logger.warning(f"Could not resolve hostname {hostname}: {e}")
             pass
 
         return True, None
     except Exception as e:
+        logger.error(f"URL validation error for {url}: {str(e)}")
         return False, f"URL validation error: {str(e)}"
 
 
 def validate_path(path: Union[str, Path]) -> Tuple[bool, Union[str, Path]]:
     """Validate path to prevent directory traversal attacks"""
+    logger.debug(f"Validating path: {path}")
+
     try:
         # Resolve the path to handle relative paths and symlinks
         resolved_path = Path(path).resolve()
 
         # Check for directory traversal attempts
         if ".." in str(resolved_path):
+            logger.warning(f"Directory traversal attempt detected in path: {path}")
             return False, "Directory traversal attempt detected"
 
         # Ensure the path exists
         if not resolved_path.exists():
+            logger.warning(f"Path does not exist: {resolved_path}")
             return False, "Path does not exist"
 
+        logger.debug(f"Path validation passed: {resolved_path}")
         return True, resolved_path
     except Exception as e:
+        logger.error(f"Path validation error for {path}: {str(e)}")
         return False, f"Path validation error: {str(e)}"
 
 
 def check_package_json(package_json_path: Union[str, Path]) -> List[Tuple[str, str]]:
     """Check package.json for vulnerable dependencies"""
-    with open(package_json_path, 'r', encoding='utf-8') as f:
-        try:
-            data = json.load(f)
-        except json.JSONDecodeError:
-            print(f"[ERROR] Invalid JSON in {package_json_path}")
-            return []
+    logger.debug(f"Checking package.json: {package_json_path}")
 
-    vulnerable_packages = [
-        "react-server-dom-webpack",
-        "react-server-dom-parcel",
-        "react-server-dom-turbopack"
-    ]
+    try:
+        with open(package_json_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    except json.JSONDecodeError as e:
+        logger.error(f"Invalid JSON in {package_json_path}: {e}")
+        return []
+    except Exception as e:
+        logger.error(f"Error reading {package_json_path}: {e}")
+        return []
+
+    # Define vulnerable packages and their version ranges
+    vulnerable_packages = {
+        "react-server-dom-webpack": ["<19.0.1"],
+        "react-server-dom-parcel": ["<19.1.2"],
+        "react-server-dom-turbopack": ["<19.2.1"],
+        "react": ["^19.0.0"]  # React 19.x.x is considered vulnerable
+    }
 
     detected_vulnerabilities: List[Tuple[str, str]] = []
 
@@ -107,35 +166,178 @@ def check_package_json(package_json_path: Union[str, Path]) -> List[Tuple[str, s
     for dep_section in ['dependencies', 'devDependencies']:
         if dep_section in data:
             deps = data[dep_section]
-            for pkg in vulnerable_packages:
+            for pkg, vuln_ranges in vulnerable_packages.items():
                 if pkg in deps:
                     ver = deps[pkg]
-                    detected_vulnerabilities.append((pkg, ver))
+                    # Use enhanced version checking
+                    if pkg == "react":
+                        if is_react_v19(ver):
+                            detected_vulnerabilities.append((pkg, ver))
+                    else:
+                        # For other packages, check against vulnerable ranges
+                        if check_version_vulnerable(pkg, ver, vuln_ranges):
+                            detected_vulnerabilities.append((pkg, ver))
 
     # Check for React v19
     if 'react' in data.get('dependencies', {}) or 'react' in data.get('devDependencies', {}):
         react_ver = data.get('dependencies', {}).get('react') or data.get('devDependencies', {}).get('react')
         if react_ver and is_react_v19(react_ver):
+            logger.info(f"Found React v19: {react_ver} in {package_json_path}")
             detected_vulnerabilities.append(('react', react_ver))
 
+    logger.debug(f"Found {len(detected_vulnerabilities)} vulnerabilities in {package_json_path}")
     return detected_vulnerabilities
 
 
-def is_react_v19(version_str: str) -> bool:
-    """Check if React version is 19.x.x"""
+def parse_version_range(version_str: str) -> Optional[Tuple[version.Version, version.Version]]:
+    """Parse version range specifications and return min/max version bounds"""
+    version_str = version_str.strip()
+
+    # Handle common version range patterns
+    if version_str.startswith('^'):
+        # ^19.0.0 means >=19.0.0 <20.0.0
+        base_version = version_str[1:]
+        try:
+            min_ver = version.parse(base_version)
+            max_ver = version.parse(f"{min_ver.major + 1}.0.0")
+            return min_ver, max_ver
+        except:
+            return None
+
+    elif version_str.startswith('~'):
+        # ~19.1.0 means >=19.1.0 <19.2.0
+        base_version = version_str[1:]
+        try:
+            min_ver = version.parse(base_version)
+            max_ver = version.parse(f"{min_ver.major}.{min_ver.minor + 1}.0")
+            return min_ver, max_ver
+        except:
+            return None
+
+    elif '>=' in version_str:
+        # >=19.0.0
+        parts = version_str.split('>=', 1)
+        if len(parts) == 2:
+            try:
+                min_ver = version.parse(parts[1].strip())
+                return min_ver, None  # No upper bound
+            except:
+                return None
+
+    elif '<=' in version_str:
+        # <=19.2.0
+        parts = version_str.split('<=', 1)
+        if len(parts) == 2:
+            try:
+                max_ver = version.parse(parts[1].strip())
+                return None, max_ver  # No lower bound
+            except:
+                return None
+
+    elif ' - ' in version_str:
+        # 19.0.0 - 19.2.0
+        parts = version_str.split(' - ', 1)
+        if len(parts) == 2:
+            try:
+                min_ver = version.parse(parts[0].strip())
+                max_ver = version.parse(parts[1].strip())
+                return min_ver, max_ver
+            except:
+                return None
+
+    # Try to parse as exact version
     try:
-        # Handle version ranges like "^19.0.0", "~19.1.2", etc.
-        version_clean = version_str.replace('^', '').replace('~', '').replace('>=', '').replace('<=', '').strip()
+        exact_ver = version.parse(version_str)
+        return exact_ver, exact_ver
+    except:
+        return None
 
-        # Extract just the version numbers
-        if version_clean.startswith('v'):
-            version_clean = version_clean[1:]
 
-        parsed_version = version.parse(version_clean.split('.')[0])
-        return parsed_version == 19
-    except Exception:
-        # If parsing fails, check if it contains '19'
+def is_react_v19(version_str: str) -> bool:
+    """Check if React version is 19.x.x using semantic versioning"""
+    logger.debug(f"Checking if version is React v19: {version_str}")
+
+    try:
+        # Parse version range
+        version_range = parse_version_range(version_str)
+
+        if version_range is None:
+            logger.warning(f"Could not parse version range: {version_str}")
+            # Fallback to simple string check
+            return '19.' in version_str or version_str.strip() == '19'
+
+        min_ver, max_ver = version_range
+
+        # Check if the range overlaps with React 19.x.x
+        react_19_min = version.parse("19.0.0")
+        react_19_max = version.parse("20.0.0")
+
+        # If we have a minimum version >= 19.0.0, it's React 19
+        if min_ver and min_ver >= react_19_min:
+            logger.debug(f"Version {version_str} matches React v19 (min: {min_ver})")
+            return True
+
+        # If we have a range that includes React 19 versions
+        if min_ver and max_ver:
+            # Check if ranges overlap: [min_ver, max_ver) overlaps with [19.0.0, 20.0.0)
+            if min_ver < react_19_max and max_ver > react_19_min:
+                logger.debug(f"Version range {version_str} overlaps with React v19")
+                return True
+
+        # If only max version is specified and it's >= 20.0.0, could include v19
+        if max_ver and max_ver >= react_19_max and (min_ver is None or min_ver <= react_19_min):
+            logger.debug(f"Version range {version_str} could include React v19")
+            return True
+
+        logger.debug(f"Version {version_str} does not match React v19")
+        return False
+
+    except Exception as e:
+        logger.warning(f"Error parsing version {version_str}: {e}")
+        # Fallback to simple string check
         return '19.' in version_str or version_str.strip() == '19'
+
+
+def check_version_vulnerable(package_name: str, version_str: str, vulnerable_ranges: List[str]) -> bool:
+    """Check if a package version is vulnerable based on version ranges"""
+    logger.debug(f"Checking if {package_name}@{version_str} is vulnerable")
+
+    try:
+        package_version = parse_version_range(version_str)
+        if package_version is None:
+            logger.warning(f"Could not parse package version: {version_str}")
+            return False
+
+        pkg_min, pkg_max = package_version
+
+        for vuln_range_str in vulnerable_ranges:
+            vuln_range = parse_version_range(vuln_range_str)
+            if vuln_range is None:
+                continue
+
+            vuln_min, vuln_max = vuln_range
+
+            # Check if package version range overlaps with vulnerable range
+            # This is a simplified overlap check
+            overlap = False
+
+            if pkg_min and vuln_min and pkg_min <= vuln_max and pkg_max >= vuln_min:
+                overlap = True
+            elif pkg_min and vuln_min is None and pkg_min <= vuln_max:
+                overlap = True
+            elif pkg_max and vuln_max is None and pkg_max >= vuln_min:
+                overlap = True
+
+            if overlap:
+                logger.info(f"Package {package_name}@{version_str} is vulnerable (matches range {vuln_range_str})")
+                return True
+
+        logger.debug(f"Package {package_name}@{version_str} is not vulnerable")
+        return False
+
+    except Exception as e:
+        logger.error(f"Error checking version vulnerability for {package_name}@{version_str}: {e}")
+        return False
 
 
 def check_lock_file(file_path: Union[str, Path]) -> List[Tuple[str, str]]:
@@ -153,11 +355,12 @@ def check_lock_file(file_path: Union[str, Path]) -> List[Tuple[str, str]]:
         # Recursively search for vulnerable packages
         def find_vulnerable_deps(obj: Union[dict, list], path: str = "") -> List[Tuple[str, str]]:
             found: List[Tuple[str, str]] = []
-            vulnerable_packages = [
-                "react-server-dom-webpack",
-                "react-server-dom-parcel",
-                "react-server-dom-turbopack"
-            ]
+            vulnerable_packages = {
+                "react-server-dom-webpack": ["<19.0.1"],
+                "react-server-dom-parcel": ["<19.1.2"],
+                "react-server-dom-turbopack": ["<19.2.1"],
+                "react": ["^19.0.0"]
+            }
 
             if isinstance(obj, dict):
                 for key, value in obj.items():
@@ -165,12 +368,14 @@ def check_lock_file(file_path: Union[str, Path]) -> List[Tuple[str, str]]:
 
                     # Check if this is a vulnerable package
                     if key in vulnerable_packages and 'version' in value:
-                        found.append((key, value['version']))
-
-                    # Check for React v19
-                    if key == 'react' and 'version' in value:
-                        if is_react_v19(value['version']):
-                            found.append(('react', value['version']))
+                        ver = value['version']
+                        vuln_ranges = vulnerable_packages[key]
+                        if key == "react":
+                            if is_react_v19(ver):
+                                found.append((key, ver))
+                        else:
+                            if check_version_vulnerable(key, ver, vuln_ranges):
+                                found.append((key, ver))
 
                     # Recursively search deeper
                     found.extend(find_vulnerable_deps(value, current_path))
@@ -188,20 +393,27 @@ def check_lock_file(file_path: Union[str, Path]) -> List[Tuple[str, str]]:
         with open(file_path, 'r', encoding='utf-8') as f:
             content = f.read()
 
-        vulnerable_packages = [
-            "react-server-dom-webpack",
-            "react-server-dom-parcel",
-            "react-server-dom-turbopack"
-        ]
+        vulnerable_packages = {
+            "react-server-dom-webpack": ["<19.0.1"],
+            "react-server-dom-parcel": ["<19.1.2"],
+            "react-server-dom-turbopack": ["<19.2.1"],
+            "react": ["^19.0.0"]
+        }
 
-        for pkg in vulnerable_packages:
+        for pkg, vuln_ranges in vulnerable_packages.items():
             if pkg in content:
                 # Find version information near the package name
                 import re
                 pattern = rf'{pkg}[^a-zA-Z0-9].*?version.*?"([^"]+)"'
                 matches = re.findall(pattern, content)
                 for match in matches:
-                    vulnerabilities.append((pkg, match))
+                    # Use enhanced version checking
+                    if pkg == "react":
+                        if is_react_v19(match):
+                            vulnerabilities.append((pkg, match))
+                    else:
+                        if check_version_vulnerable(pkg, match, vuln_ranges):
+                            vulnerabilities.append((pkg, match))
 
     return vulnerabilities
 
@@ -209,13 +421,14 @@ def check_lock_file(file_path: Union[str, Path]) -> List[Tuple[str, str]]:
 def check_node_modules(node_modules_path: Union[str, Path]) -> List[Tuple[str, str]]:
     """Check node_modules for vulnerable packages"""
     vulnerabilities: List[Tuple[str, str]] = []
-    vulnerable_packages = [
-        "react-server-dom-webpack",
-        "react-server-dom-parcel",
-        "react-server-dom-turbopack"
-    ]
+    vulnerable_packages = {
+        "react-server-dom-webpack": ["<19.0.1"],
+        "react-server-dom-parcel": ["<19.1.2"],
+        "react-server-dom-turbopack": ["<19.2.1"],
+        "react": ["^19.0.0"]
+    }
 
-    for pkg in vulnerable_packages:
+    for pkg, vuln_ranges in vulnerable_packages.items():
         pkg_path = os.path.join(str(node_modules_path), pkg)
         if os.path.exists(pkg_path):
             # Look for package.json inside the package folder to get version
@@ -225,35 +438,92 @@ def check_node_modules(node_modules_path: Union[str, Path]) -> List[Tuple[str, s
                     try:
                         data = json.load(f)
                         ver = data.get('version', 'unknown')
-                        vulnerabilities.append((pkg, ver))
+                        # Use enhanced version checking
+                        if pkg == "react":
+                            if is_react_v19(ver):
+                                vulnerabilities.append((pkg, ver))
+                        else:
+                            if check_version_vulnerable(pkg, ver, vuln_ranges):
+                                vulnerabilities.append((pkg, ver))
                     except json.JSONDecodeError:
-                        vulnerabilities.append((pkg, 'unknown'))
+                        logger.warning(f"Could not parse package.json for {pkg}")
             else:
+                logger.debug(f"No package.json found for {pkg}, marking as found")
                 vulnerabilities.append((pkg, 'found'))
-
-    # Check for React v19
-    react_path = os.path.join(str(node_modules_path), 'react')
-    if os.path.exists(react_path):
-        package_json_path = os.path.join(react_path, 'package.json')
-        if os.path.exists(package_json_path):
-            with open(package_json_path, 'r', encoding='utf-8') as f:
-                try:
-                    data = json.load(f)
-                    ver = data.get('version', 'unknown')
-                    if is_react_v19(ver):
-                        vulnerabilities.append(('react', ver))
-                except json.JSONDecodeError:
-                    pass
 
     return vulnerabilities
 
 
 def passive_check_url(url: str) -> bool:
     """Perform passive check on a URL"""
+    logger.debug(f"Starting passive URL check: {url}")
+
     # Validate URL first
     is_valid, error_msg = validate_url(url)
     if not is_valid:
-        print(f"[ERROR] URL validation failed: {error_msg}")
+        logger.error(f"URL validation failed for {url}: {error_msg}")
+        return False
+
+    try:
+        # Set appropriate User-Agent based on platform
+        if platform.system() == "Windows":
+            user_agent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        else:
+            user_agent = 'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:91.0) Gecko/20100101 Firefox/91.0'
+
+        headers = {
+            'User-Agent': user_agent,
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Accept-Encoding': 'gzip, deflate',
+            'Connection': 'close',
+            'Upgrade-Insecure-Requests': '1',
+        }
+
+        logger.debug(f"Making HTTP request to {url}")
+        response = requests.get(url, headers=headers, timeout=10)
+
+        # Enhanced React detection in response
+        content_type = response.headers.get('content-type', '').lower()
+        body_lower = response.text.lower()
+        server_header = response.headers.get('server', '').lower()
+
+        # Comprehensive React detection patterns
+        react_indicators = {
+            'body_contains_react': 'react' in body_lower,
+            'content_type_react': 'react' in content_type,
+            'server_header_react': 'react' in server_header,
+            'body_contains_nextjs': 'next.js' in body_lower or '_next' in body_lower,
+            'body_contains_gatsby': 'gatsby' in body_lower,
+            'body_contains_create_react_app': 'react-app' in body_lower,
+            'body_contains_react_scripts': 'react-scripts' in body_lower,
+            'body_contains_react_dom': 'react-dom' in body_lower,
+            'body_contains_jsx': 'jsx' in body_lower or 'tsx' in body_lower,
+            'body_contains_react_hook': 'useState' in body_lower or 'useEffect' in body_lower,
+            'body_contains_react_component': 'componentDidMount' in body_lower or 'render()' in body_lower,
+            'headers_react_dev': 'x-react' in str(response.headers).lower(),
+            'body_contains_react_error': 'react error' in body_lower or 'react warning' in body_lower,
+            'body_contains_react_devtools': 'react_devtools' in body_lower,
+            'url_contains_react': 'react' in url.lower(),
+            'body_contains_react_version': 'react@' in body_lower or 'react/' in body_lower
+        }
+
+        # Check if any React indicators are found
+        found_indicators = [key for key, found in react_indicators.items() if found]
+        has_react_indicators = len(found_indicators) > 0
+
+        logger.debug(f"React detection for {url}: found {len(found_indicators)} indicators: {found_indicators}")
+
+        if has_react_indicators:
+            logger.info(f"Potential React application detected at: {url}")
+            logger.debug(f"React indicators found - body: {'react' in body_lower}, content-type: {'react' in content_type}, server: {'react' in server_header}")
+            return True
+        else:
+            logger.info(f"No clear React indicators found at: {url}")
+            return False
+
+    except requests.RequestException as e:
+        logger.error(f"Could not reach URL {url}: {str(e)}")
         return False
 
     try:
@@ -313,15 +583,16 @@ def find_project_root(start_path: Union[str, Path]) -> Optional[Path]:
 def scan_path(path: Union[str, Path], max_workers: int = 4, show_progress: bool = True) -> List[Tuple[str, str]]:
     """Scan a path for React2Shell vulnerabilities"""
     start_time = time.time()
+    logger.info(f"Starting scan of path: {path}")
 
     # Validate path first
     is_valid, result = validate_path(path)
     if not is_valid:
-        print(f"[ERROR] Path validation failed: {result}")
+        logger.error(f"Path validation failed: {result}")
         return []
 
     abs_path = Path(result)  # Ensure it's a Path object
-    print(f"[INFO] Scanning path: {abs_path}")
+    logger.info(f"Scanning path: {abs_path}")
 
     vulnerabilities: List[Tuple[str, str]] = []
 
@@ -331,6 +602,7 @@ def scan_path(path: Union[str, Path], max_workers: int = 4, show_progress: bool 
     # Check for package.json
     pkg_json = abs_path / 'package.json'
     if pkg_json.exists():
+        logger.debug(f"Found package.json: {pkg_json}")
         if show_progress:
             print(f"[INFO] Found package.json: {pkg_json}")
         files_to_scan.append(('package_json', str(pkg_json)))
@@ -344,6 +616,7 @@ def scan_path(path: Union[str, Path], max_workers: int = 4, show_progress: bool 
 
     for file_type, file_path in lock_files:
         if file_path.exists():
+            logger.debug(f"Found {file_type}: {file_path}")
             if show_progress:
                 print(f"[INFO] Found {file_type}: {file_path}")
             files_to_scan.append((file_type, str(file_path)))
@@ -351,37 +624,45 @@ def scan_path(path: Union[str, Path], max_workers: int = 4, show_progress: bool 
     # Check for node_modules
     node_modules = abs_path / 'node_modules'
     if node_modules.exists():
+        logger.debug(f"Found node_modules: {node_modules}")
         if show_progress:
             print(f"[INFO] Found node_modules: {node_modules}")
         files_to_scan.append(('node_modules', str(node_modules)))
 
     # Also search in subdirectories for additional package.json files
+    logger.debug("Searching for additional package.json files...")
     if show_progress:
         print("[INFO] Searching for additional package.json files...")
 
     for package_json_path in abs_path.rglob('package.json'):
         if package_json_path != pkg_json:  # Don't double count
+            logger.debug(f"Found additional package.json: {package_json_path}")
             if show_progress:
                 print(f"[INFO] Found additional package.json: {package_json_path}")
             files_to_scan.append(('package_json', str(package_json_path)))
 
     total_files = len(files_to_scan)
+    logger.info(f"Found {total_files} files to scan")
     if show_progress and total_files > 0:
         print(f"[INFO] Scanning {total_files} files with {max_workers} workers...")
 
     # Scan files in parallel
     def scan_file(file_info):
         file_type, file_path = file_info
-        if file_type == 'package_json':
-            return check_package_json(file_path)
-        elif file_type in ['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml']:
-            return check_lock_file(file_path)
-        elif file_type == 'node_modules':
-            return check_node_modules(file_path)
-        return []
+        try:
+            if file_type == 'package_json':
+                return check_package_json(file_path)
+            elif file_type in ['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml']:
+                return check_lock_file(file_path)
+            elif file_type == 'node_modules':
+                return check_node_modules(file_path)
+            return []
+        except Exception as e:
+            logger.error(f"Error scanning {file_path}: {e}")
+            return []
 
-    completed = 0
     # Use ThreadPoolExecutor for parallel scanning
+    completed = 0
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_file = {executor.submit(scan_file, file_info): file_info for file_info in files_to_scan}
 
@@ -393,9 +674,13 @@ def scan_path(path: Union[str, Path], max_workers: int = 4, show_progress: bool 
                 if show_progress and total_files > 1:
                     progress = (completed / total_files) * 100
                     print(f"[INFO] Progress: {progress:.1f}% ({completed}/{total_files} files)")
+                    logger.debug(f"Completed {completed}/{total_files} files")
             except Exception as e:
                 file_info = future_to_file[future]
-                print(f"[ERROR] Failed to scan {file_info[1]}: {str(e)}")
+                error_msg = f"Failed to scan {file_info[1]}: {str(e)}"
+                logger.error(error_msg)
+                if show_progress:
+                    print(f"[ERROR] {error_msg}")
 
     # Remove duplicates while preserving order
     seen = set()
@@ -406,6 +691,7 @@ def scan_path(path: Union[str, Path], max_workers: int = 4, show_progress: bool 
             unique_vulnerabilities.append(vuln)
 
     elapsed_time = time.time() - start_time
+    logger.info(f"Scan completed in {elapsed_time:.2f} seconds, found {len(unique_vulnerabilities)} vulnerabilities")
     if show_progress:
         print(f"[INFO] Scan completed in {elapsed_time:.2f} seconds")
 
@@ -449,6 +735,7 @@ def main() -> None:
 Examples:
   %(prog)s --path /path/to/your/project
   %(prog)s --url https://your-site.example
+  %(prog)s --path /project --verbose --log-file scan.log
         """
     )
 
@@ -457,12 +744,75 @@ Examples:
     parser.add_argument('--json', action='store_true', help='Output results in JSON format')
     parser.add_argument('--quiet', action='store_true', help='Suppress progress messages')
     parser.add_argument('--workers', type=int, default=4, help='Number of parallel workers (default: 4)')
+    parser.add_argument('--verbose', action='store_true', help='Enable verbose logging')
+    parser.add_argument('--log-file', type=str, help='Log to specified file')
 
     args = parser.parse_args()
 
     if not args.path and not args.url:
         parser.print_help()
         sys.exit(1)
+
+    # Setup logging based on arguments
+    global logger
+    logger = setup_logging(verbose=args.verbose, log_file=args.log_file)
+
+    logger.info("React2Shell Vulnerability Checker started")
+    logger.debug(f"Arguments: {vars(args)}")
+
+    show_progress = not args.quiet
+
+    if args.path:
+        try:
+            logger.info(f"Starting path scan: {args.path}")
+            vulnerabilities = scan_path(args.path, max_workers=args.workers, show_progress=show_progress)
+            print_vulnerabilities(vulnerabilities, args.json)
+            logger.info(f"Path scan completed, found {len(vulnerabilities)} vulnerabilities")
+        except Exception as e:
+            logger.error(f"An error occurred during path scanning: {str(e)}")
+            if args.json:
+                import json
+                error_result = {
+                    "error": True,
+                    "message": f"An error occurred during path scanning: {str(e)}"
+                }
+                print(json.dumps(error_result, indent=2))
+            else:
+                print(f"[ERROR] An error occurred during path scanning: {str(e)}")
+            sys.exit(1)
+
+    if args.url:
+        try:
+            logger.info(f"Starting URL check: {args.url}")
+            result = passive_check_url(args.url)
+            if args.json:
+                import json
+                url_result = {
+                    "url_checked": args.url,
+                    "react_indicators_found": result,
+                    "recommendation": "Manual verification recommended" if result else "Appears unaffected"
+                }
+                print(json.dumps(url_result, indent=2))
+            else:
+                if result:
+                    print(f"[INFO] URL {args.url} may be vulnerable. Manual verification recommended.")
+                else:
+                    print(f"[INFO] URL {args.url} appears to be unaffected based on initial check.")
+            logger.info(f"URL check completed for {args.url}")
+        except Exception as e:
+            logger.error(f"An error occurred during URL scanning: {str(e)}")
+            if args.json:
+                import json
+                error_result = {
+                    "error": True,
+                    "message": f"An error occurred during URL scanning: {str(e)}"
+                }
+                print(json.dumps(error_result, indent=2))
+            else:
+                print(f"[ERROR] An error occurred during URL scanning: {str(e)}")
+            sys.exit(1)
+
+    logger.info("React2Shell Vulnerability Checker finished")
 
     if args.path:
         try:

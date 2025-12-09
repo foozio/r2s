@@ -1,0 +1,55 @@
+# Docker Compose for React2Shell Vulnerability Checker
+
+version: '3.8'
+
+services:
+  react2shell-scanner:
+    build: .
+    container_name: react2shell-scanner
+    volumes:
+      - ./scans:/app/scans
+      - ./logs:/app/logs
+    environment:
+      - PYTHONUNBUFFERED=1
+    command: ["--help"]
+
+  # Example service for scanning a mounted project
+  scan-project:
+    build: .
+    container_name: react2shell-project-scan
+    volumes:
+      - ./target-project:/app/target-project:ro
+      - ./scans:/app/scans
+      - ./logs:/app/logs
+    environment:
+      - PYTHONUNBUFFERED=1
+    command: ["--path", "/app/target-project", "--json", "--log-file", "/app/logs/scan.log"]
+    profiles:
+      - scan
+
+  # Example service for URL scanning
+  scan-url:
+    build: .
+    container_name: react2shell-url-scan
+    volumes:
+      - ./logs:/app/logs
+    environment:
+      - PYTHONUNBUFFERED=1
+    command: ["--url", "https://example.com", "--json", "--verbose"]
+    profiles:
+      - url-scan
+
+  # CI/CD integration example
+  ci-scan:
+    build: .
+    container_name: react2shell-ci-scan
+    volumes:
+      - ../:/workspace:ro  # Mount workspace
+      - ./scans:/app/scans
+      - ./logs:/app/logs
+    environment:
+      - PYTHONUNBUFFERED=1
+      - CI=true
+    command: ["--path", "/workspace", "--json", "--quiet"]
+    profiles:
+      - ci
